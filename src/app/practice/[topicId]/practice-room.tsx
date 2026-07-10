@@ -54,11 +54,17 @@ type AnswerRecord = {
     aiSuccess: boolean;
     fallbackUsed: boolean;
     failureReason?: string;
+    aiSource: "llm" | "mock_fallback";
+    fallbackReason?: string;
+    llmLatencyMs?: number | null;
   };
   retryFeedback?: {
     type: RetryFeedbackResult["feedback_type"];
     text: string;
     generationMode: "mock" | "ai";
+    aiSource: "llm" | "mock_fallback";
+    fallbackReason?: string;
+    llmLatencyMs?: number | null;
     markedRetryTranscript: RetryTranscriptSegment[];
   };
 };
@@ -330,6 +336,9 @@ function toPolishViewModel(result: AiServiceResult<PolishResult>) {
     aiSuccess: result.ai_success,
     fallbackUsed: result.fallback_used,
     failureReason: result.failure_reason,
+    aiSource: result.ai_source,
+    fallbackReason: result.fallback_reason,
+    llmLatencyMs: result.llm_latency_ms,
   };
 }
 
@@ -341,6 +350,9 @@ function toRetryFeedbackViewModel(
     type: result.data.feedback_type,
     text: result.data.feedback_text,
     generationMode: result.generation_mode,
+    aiSource: result.ai_source,
+    fallbackReason: result.fallback_reason,
+    llmLatencyMs: result.llm_latency_ms,
     markedRetryTranscript,
   };
 }
@@ -465,8 +477,12 @@ function DebugPanel({
     ].includes(event.event_name),
   );
   const ttsEvent = events.find((event) => event.event_name === "tts_playback");
+  const aiEvent = events.find((event) =>
+    ["polish_generated", "retry_feedback_generated"].includes(event.event_name),
+  );
   const speechPayload = speechEvent?.payload ?? {};
   const ttsPayload = ttsEvent?.payload ?? {};
+  const aiPayload = aiEvent?.payload ?? {};
   const debugValue = (payload: Record<string, unknown>, key: string) => {
     const value = payload[key];
 
@@ -529,6 +545,14 @@ function DebugPanel({
             recognition_status: {debugValue(speechPayload, "recognition_status")}
           </p>
           <p>answer_text: {debugValue(speechPayload, "answer_text")}</p>
+        </div>
+        <div className="rounded-xl bg-bamboo-50 p-2">
+          <p className="font-bold text-ink">latest A03/A04 AI</p>
+          <p>event_name: {aiEvent?.event_name ?? "missing"}</p>
+          <p>ai_node: {debugValue(aiPayload, "ai_node")}</p>
+          <p>ai_source: {debugValue(aiPayload, "ai_source")}</p>
+          <p>fallback_reason: {debugValue(aiPayload, "fallback_reason")}</p>
+          <p>llm_latency_ms: {debugValue(aiPayload, "llm_latency_ms")}</p>
         </div>
         <div className="space-y-1">
           {events.map((event) => (
@@ -1100,6 +1124,8 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     const retryFeedbackResult =
       kind === "retry"
         ? await generateRetryFeedback({
+            topic_id: topic.id,
+            question_id: currentQuestion.id,
             question_text: currentQuestion.text,
             first_answer: firstAnswer?.text ?? "",
             polished_answer: firstAnswer?.polish?.polishedAnswer ?? "",
@@ -1135,8 +1161,17 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       (!hasPolishOutput || polishResult?.fallback_used)
     ) {
       trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
-        ai_task: "polish",
-        reason: polishResult?.failure_reason ?? "empty_polish",
+        ai_node: "polish",
+        ai_source: polishResult?.ai_source ?? "mock_fallback",
+        fallback_reason:
+          polishResult?.fallback_reason ??
+          polishResult?.failure_reason ??
+          "empty_polish",
+        llm_latency_ms: polishResult?.llm_latency_ms ?? null,
+        reason:
+          polishResult?.fallback_reason ??
+          polishResult?.failure_reason ??
+          "empty_polish",
       });
       if (!hasPolishOutput) {
         setNotice("\u6da6\u8272\u5185\u5bb9\u6682\u65f6\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002");
@@ -1145,8 +1180,17 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
     if (kind === "retry" && retryFeedbackResult?.fallback_used) {
       trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
-        ai_task: "retry_feedback",
-        reason: retryFeedbackResult.failure_reason ?? "retry_feedback_failed",
+        ai_node: "retry_feedback",
+        ai_source: retryFeedbackResult.ai_source,
+        fallback_reason:
+          retryFeedbackResult.fallback_reason ??
+          retryFeedbackResult.failure_reason ??
+          "retry_feedback_failed",
+        llm_latency_ms: retryFeedbackResult.llm_latency_ms ?? null,
+        reason:
+          retryFeedbackResult.fallback_reason ??
+          retryFeedbackResult.failure_reason ??
+          "retry_feedback_failed",
       });
       setNotice("\u91cd\u8bf4\u53cd\u9988\u6682\u65f6\u751f\u6210\u5931\u8d25\uff0c\u4f46\u60a8\u7684\u91cd\u8bf4\u56de\u7b54\u5df2\u4fdd\u5b58\u3002");
     }
@@ -1196,9 +1240,13 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackedRef.current.polishGenerated.add(currentQuestionIndex);
       trackPracticeEvent("polish_generated", currentQuestionIndex, {
         ai_success: polish.aiSuccess,
+        ai_node: "polish",
+        ai_source: polish.aiSource,
         fallback_used: polish.fallbackUsed,
+        fallback_reason: polish.fallbackReason,
         failure_reason: polish.failureReason,
         generation_mode: polish.generationMode,
+        llm_latency_ms: polish.llmLatencyMs ?? null,
         a03_generated: hasPolishOutput,
         marked_error_count: polish.markedErrorCount,
         marked_improve_count: polish.markedImproveCount,
@@ -1215,8 +1263,20 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       !trackedRef.current.retryAnswerSubmitted.has(currentQuestionIndex)
     ) {
       trackedRef.current.retryAnswerSubmitted.add(currentQuestionIndex);
+      trackPracticeEvent("retry_feedback_generated", currentQuestionIndex, {
+        ai_node: "retry_feedback",
+        ai_source: retryFeedback.aiSource,
+        fallback_reason: retryFeedback.fallbackReason,
+        feedback_generation_mode: retryFeedback.generationMode,
+        llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
+        retry_feedback_type: retryFeedback.type,
+      });
       trackPracticeEvent("retry_answer_submitted", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
+        retry_ai_node: "retry_feedback",
+        retry_ai_source: retryFeedback.aiSource,
+        retry_fallback_reason: retryFeedback.fallbackReason,
+        retry_llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
         fallback_reason: fallbackReason,
         fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
         feedback_generation_mode: retryFeedback.generationMode,

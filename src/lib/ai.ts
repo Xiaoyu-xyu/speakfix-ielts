@@ -59,7 +59,25 @@ export type PolishResult = {
   reason: string;
 };
 
+export type ApiPolishSegment = {
+  text: string;
+  markType: "none" | "red" | "orange";
+  reason: string;
+};
+
+export type ApiPolishResponse = {
+  originalSegments: ApiPolishSegment[];
+  polishedAnswer: string;
+  extensionSentence: string;
+  hasMeaningfulPolish: boolean;
+  source: "llm" | "mock_fallback";
+  fallbackReason: string | null;
+  llmLatencyMs: number | null;
+};
+
 export type RetryFeedbackInput = {
+  topic_id?: string;
+  question_id?: string;
   question_text: string;
   first_answer: string;
   polished_answer: string;
@@ -74,12 +92,27 @@ export type RetryFeedbackResult = {
   feedback_text: string;
 };
 
+export type ApiRetryFeedbackResponse = {
+  feedbackType:
+    | "adopted_suggestion"
+    | "improved_expression"
+    | "needs_adjustment";
+  feedbackText: string;
+  adoptedExpressions: string[];
+  source: "llm" | "mock_fallback";
+  fallbackReason: string | null;
+  llmLatencyMs: number | null;
+};
+
 export type AiServiceResult<T> = {
   data: T;
   generation_mode: "mock" | "ai";
   ai_success: boolean;
   fallback_used: boolean;
   failure_reason?: string;
+  ai_source: "llm" | "mock_fallback";
+  fallback_reason?: string;
+  llm_latency_ms?: number | null;
 };
 
 const preHelpByStructure: Record<
@@ -181,6 +214,9 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
     generation_mode: "mock",
     ai_success: false,
     fallback_used: false,
+    ai_source: "mock_fallback",
+    fallback_reason: "mock_rule",
+    llm_latency_ms: null,
   };
 }
 
@@ -358,6 +394,10 @@ function createSafePolish(input: PolishInput): PolishResult {
   };
 }
 
+export function createMockPolishResult(input: PolishInput): PolishResult {
+  return createSafePolish(input);
+}
+
 function createSafePolishedAnswer(input: PolishInput) {
   const trimmedAnswer = input.user_answer.trim();
   const lowerAnswer = trimmedAnswer.toLowerCase();
@@ -504,6 +544,20 @@ function createSafeRetryFeedback(): RetryFeedbackResult {
   };
 }
 
+export function createMockRetryFeedbackResult(
+  input: RetryFeedbackInput,
+): RetryFeedbackResult {
+  if (hasAdoptedExpansionSentence(input)) {
+    return createAdoptedRetryFeedback();
+  }
+
+  if (hasMetaAnswerExpression(input.retry_answer)) {
+    return createMetaExpressionRetryFeedback(input);
+  }
+
+  return createSafeRetryFeedback();
+}
+
 function validatePolishResult(result: PolishResult) {
   return (
     Array.isArray(result.markedTranscript) &&
@@ -594,36 +648,84 @@ async function callAiRoute<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
+function mapApiPolishToPolishResult(
+  result: ApiPolishResponse,
+  fallback: PolishResult,
+): PolishResult {
+  return {
+    markedTranscript: result.originalSegments.map((segment) => ({
+      text: segment.text,
+      type:
+        segment.markType === "red"
+          ? "error"
+          : segment.markType === "orange"
+            ? "improve"
+            : "normal",
+    })),
+    polishedAnswer: result.polishedAnswer,
+    noPolishNeeded: !result.hasMeaningfulPolish,
+    shouldExpand: Boolean(result.extensionSentence.trim()),
+    expansionType: result.extensionSentence.trim()
+      ? fallback.expansionType
+      : ("鏃犻渶鎵╁睍" as ExpansionType),
+    expansionSentence: result.extensionSentence,
+    reason: result.extensionSentence.trim()
+      ? "The answer is short, so one light extension can make it easier to speak."
+      : "The answer already has enough basic information for a short Part 1 response.",
+  };
+}
+
+function mapFeedbackTypeToLegacy(
+  feedbackType: ApiRetryFeedbackResponse["feedbackType"],
+): RetryFeedbackType {
+  if (feedbackType === "adopted_suggestion") {
+    return "\u91c7\u7eb3\u5efa\u8bae" as RetryFeedbackType;
+  }
+
+  if (feedbackType === "needs_adjustment") {
+    return "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType;
+  }
+
+  return "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType;
+}
+
+function mapApiRetryFeedbackToRetryFeedbackResult(
+  result: ApiRetryFeedbackResponse,
+): RetryFeedbackResult {
+  return {
+    feedback_type: mapFeedbackTypeToLegacy(result.feedbackType),
+    feedback_text: result.feedbackText,
+  };
+}
+
 export async function generatePolishSuggestion(
   input: PolishInput,
 ): Promise<AiServiceResult<PolishResult>> {
-  const aiEnabled = process.env.NEXT_PUBLIC_AI_API_ENABLED === "true";
-  const fallback = createSafePolish(input);
-
-  if (!aiEnabled) {
-    return {
-      data: fallback,
-      generation_mode: "mock",
-      ai_success: false,
-      fallback_used: false,
-    };
-  }
+  const fallback = createMockPolishResult(input);
 
   try {
-    const result = await callAiRoute<PolishResult>("/api/ai/polish", {
-      input,
-      prompt: POLISH_PROMPT,
+    const result = await callAiRoute<ApiPolishResponse>("/api/ai/polish", {
+      topicId: input.topic_id,
+      questionId: `${input.topic_id}-${input.question_index}`,
+      questionText: input.question_text,
+      userTranscript: input.user_answer,
+      answerStructureType: input.answerStructureType,
     });
+    const mappedResult = mapApiPolishToPolishResult(result, fallback);
 
-    if (!validatePolishResult(result)) {
+    if (!validatePolishResult(mappedResult)) {
       throw new Error("invalid_ai_output");
     }
 
     return {
-      data: result,
-      generation_mode: "ai",
-      ai_success: true,
-      fallback_used: false,
+      data: mappedResult,
+      generation_mode: result.source === "llm" ? "ai" : "mock",
+      ai_success: result.source === "llm",
+      fallback_used: result.source === "mock_fallback",
+      failure_reason: result.fallbackReason ?? undefined,
+      ai_source: result.source,
+      fallback_reason: result.fallbackReason ?? undefined,
+      llm_latency_ms: result.llmLatencyMs,
     };
   } catch (error) {
     return {
@@ -633,6 +735,10 @@ export async function generatePolishSuggestion(
       fallback_used: true,
       failure_reason:
         error instanceof Error ? error.message : "ai_generation_failed",
+      ai_source: "mock_fallback",
+      fallback_reason:
+        error instanceof Error ? error.message : "ai_generation_failed",
+      llm_latency_ms: null,
     };
   }
 }
@@ -640,43 +746,36 @@ export async function generatePolishSuggestion(
 export async function generateRetryFeedback(
   input: RetryFeedbackInput,
 ): Promise<AiServiceResult<RetryFeedbackResult>> {
-  const aiEnabled = process.env.NEXT_PUBLIC_AI_API_ENABLED === "true";
-  const fallback = hasAdoptedExpansionSentence(input)
-    ? createAdoptedRetryFeedback()
-    : hasMetaAnswerExpression(input.retry_answer)
-      ? createMetaExpressionRetryFeedback(input)
-      : createSafeRetryFeedback();
-
-  if (!aiEnabled) {
-    return {
-      data: fallback,
-      generation_mode: "mock",
-      ai_success: false,
-      fallback_used: false,
-    };
-  }
+  const fallback = createMockRetryFeedbackResult(input);
 
   try {
-    const result = await callAiRoute<RetryFeedbackResult>(
+    const result = await callAiRoute<ApiRetryFeedbackResponse>(
       "/api/ai/retry-feedback",
       {
-        input,
-        prompt: RETRY_FEEDBACK_PROMPT,
+        topicId: input.topic_id ?? "",
+        questionId: input.question_id ?? "",
+        questionText: input.question_text,
+        firstTranscript: input.first_answer,
+        polishedAnswer: input.polished_answer,
+        extensionSentence: input.expansion_sentence ?? "",
+        retryTranscript: input.retry_answer,
       },
     );
+    const mappedResult = mapApiRetryFeedbackToRetryFeedbackResult(result);
 
-    if (!result.feedback_text) {
+    if (!mappedResult.feedback_text) {
       throw new Error("invalid_retry_feedback");
     }
 
     return {
-      data: {
-        feedback_type: normalizeFeedbackType(result.feedback_type),
-        feedback_text: result.feedback_text,
-      },
-      generation_mode: "ai",
-      ai_success: true,
-      fallback_used: false,
+      data: mappedResult,
+      generation_mode: result.source === "llm" ? "ai" : "mock",
+      ai_success: result.source === "llm",
+      fallback_used: result.source === "mock_fallback",
+      failure_reason: result.fallbackReason ?? undefined,
+      ai_source: result.source,
+      fallback_reason: result.fallbackReason ?? undefined,
+      llm_latency_ms: result.llmLatencyMs,
     };
   } catch (error) {
     return {
@@ -686,6 +785,10 @@ export async function generateRetryFeedback(
       fallback_used: true,
       failure_reason:
         error instanceof Error ? error.message : "retry_feedback_failed",
+      ai_source: "mock_fallback",
+      fallback_reason:
+        error instanceof Error ? error.message : "retry_feedback_failed",
+      llm_latency_ms: null,
     };
   }
 }
