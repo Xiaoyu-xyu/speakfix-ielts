@@ -1,9 +1,12 @@
 import {
+  generatePreHelp,
   createMockPolishResult,
   createMockRetryFeedbackResult,
+  type ApiPreAnswerResponse,
   type ApiPolishResponse,
   type ApiRetryFeedbackResponse,
   type MarkedTranscriptSegment,
+  type PreAnswerInput,
   type PolishInput,
   type RetryFeedbackInput,
   type RetryFeedbackResult,
@@ -210,6 +213,100 @@ export function createPolishFallbackResponse(
     aiProvider: getAiProvider(),
     fallbackReason,
     llmLatencyMs,
+  };
+}
+
+export function createPreAnswerFallbackResponse(
+  input: PreAnswerInput,
+  fallbackReason: FallbackReason,
+  llmLatencyMs: number | null,
+): ApiPreAnswerResponse {
+  const mockResult = generatePreHelp({
+    topic_title: "",
+    question_id: input.question_id,
+    question_text_en: input.question_text,
+    question_translation_zh: "",
+    question_index: 1,
+    answerStructureType: input.answerStructureType,
+  }).data;
+
+  return {
+    directionZh: mockResult.answer_direction_zh,
+    keywords: mockResult.useful_keywords_en.slice(0, 5),
+    sentenceStarters: [mockResult.sentence_starter_en].filter(Boolean),
+    optionalReminder: mockResult.caution_zh,
+    source: "mock_fallback",
+    aiProvider: getAiProvider(),
+    fallbackReason,
+    llmLatencyMs,
+  };
+}
+
+export function validatePreAnswerApiResponse(
+  value: unknown,
+): ApiPreAnswerResponse | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (
+    !isNonEmptyString(value.directionZh) ||
+    value.directionZh.trim().length > 30 ||
+    !Array.isArray(value.keywords) ||
+    value.keywords.length < 3 ||
+    value.keywords.length > 5 ||
+    !value.keywords.every(isNonEmptyString) ||
+    !Array.isArray(value.sentenceStarters) ||
+    value.sentenceStarters.length < 1 ||
+    value.sentenceStarters.length > 2 ||
+    !value.sentenceStarters.every(isNonEmptyString) ||
+    typeof value.optionalReminder !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    directionZh: String(value.directionZh).trim(),
+    keywords: value.keywords.map((keyword) => keyword.trim()).slice(0, 5),
+    sentenceStarters: value.sentenceStarters
+      .map((starter) => starter.trim())
+      .slice(0, 2),
+    optionalReminder: String(value.optionalReminder).trim(),
+    source: "llm",
+    aiProvider: getAiProvider(),
+    fallbackReason: null,
+    llmLatencyMs: null,
+  };
+}
+
+export async function generatePreAnswerWithLlm(
+  input: PreAnswerInput,
+): Promise<ApiPreAnswerResponse> {
+  const llmResult = await callLlmJson(PRE_ANSWER_SYSTEM_PROMPT, {
+    topicId: input.topic_id,
+    questionId: input.question_id,
+    questionText: input.question_text,
+    answerStructureType: input.answerStructureType,
+  });
+
+  if (!llmResult.ok) {
+    return createPreAnswerFallbackResponse(
+      input,
+      llmResult.reason,
+      llmResult.latencyMs,
+    );
+  }
+
+  const validated = validatePreAnswerApiResponse(llmResult.data);
+
+  if (!validated) {
+    return createPreAnswerFallbackResponse(input, "schema_invalid", llmResult.latencyMs);
+  }
+
+  return {
+    ...validated,
+    aiProvider: llmResult.provider,
+    llmLatencyMs: llmResult.latencyMs,
   };
 }
 
@@ -421,6 +518,28 @@ export function parsePolishRequestBody(body: unknown): PolishInput | null {
   };
 }
 
+export function parsePreAnswerRequestBody(body: unknown): PreAnswerInput | null {
+  if (!isRecord(body)) {
+    return null;
+  }
+
+  if (
+    !isNonEmptyString(body.topicId) ||
+    !isNonEmptyString(body.questionId) ||
+    !isNonEmptyString(body.questionText) ||
+    !isNonEmptyString(body.answerStructureType)
+  ) {
+    return null;
+  }
+
+  return {
+    topic_id: body.topicId,
+    question_id: body.questionId,
+    question_text: body.questionText,
+    answerStructureType: body.answerStructureType as AnswerStructureType,
+  };
+}
+
 export function parseRetryFeedbackRequestBody(
   body: unknown,
 ): RetryFeedbackInput | null {
@@ -456,6 +575,8 @@ Product boundary:
 - Keep the answer natural, short, spoken, and suitable for IELTS 6.0-6.5.
 - Avoid overly written or model-answer language.
 - Do not mark natural spoken phrases as errors. Phrases like "in Shanghai" and "usually like" are normally fine.
+- Keep the tone low-pressure and coach-like. Avoid harsh wording such as "serious error", "must change", "wrong answer", or "do not say this".
+- If something can be improved, think in terms of "This can sound a little more natural" or "If the user wants a fuller answer, add one simple reason".
 
 Marking rules:
 - originalSegments must cover the user's transcript in order.
@@ -485,10 +606,12 @@ Allowed feedbackType values:
 
 Important bad case:
 If the retry says something like "I can also give a simple reason to make it clearer", "I can give a reason", "I will explain more", "For this question", or "My answer is", it is describing a strategy rather than answering the IELTS question. It must be needs_adjustment.
+For this bad case, use a gentle Chinese feedbackText like: "这句更像是在说答题方法，还没有真正回答题目。下一次可以直接说你的答案，再补一句具体原因。"
 
 User-facing rules:
 - feedbackText must be short, low-pressure, and in Chinese.
 - Do not show internal field names, type labels, Band scores, scoring language, or pronunciation feedback.
+- Avoid harsh wording. Keep it brief, encouraging, and practical.
 - adoptedExpressions should list concrete adopted phrases only. If none, use [].
 
 Output shape:
@@ -496,4 +619,30 @@ Output shape:
   "feedbackType": "adopted_suggestion | improved_expression | needs_adjustment",
   "feedbackText": "short Chinese feedback",
   "adoptedExpressions": ["string"]
+}`;
+
+const PRE_ANSWER_SYSTEM_PROMPT = `You are SpeakFix IELTS A02, a low-pressure pre-answer idea coach for IELTS Speaking Part 1.
+Return strict JSON only. No Markdown, no explanations outside JSON.
+
+Goal:
+Help an IELTS 6.0-6.5 user know how to start speaking before answering.
+
+Rules:
+- Do not generate a full answer.
+- Do not answer for the user.
+- Do not write a model answer or long paragraph.
+- Do not mention Band scores or scoring.
+- Keep the tone light, practical, and encouraging.
+- directionZh must be Chinese, at most 30 Chinese characters.
+- keywords must contain 3-5 simple English words or short phrases.
+- sentenceStarters must contain 1-2 short English sentence starters, with blanks or replaceable parts.
+- optionalReminder must be a short Chinese reminder.
+- Stay close to the question and answerStructureType.
+
+Output shape:
+{
+  "directionZh": "中文方向，不超过30字",
+  "keywords": ["simple", "English", "phrases"],
+  "sentenceStarters": ["I would say ..., because ..."],
+  "optionalReminder": "中文轻提醒"
 }`;

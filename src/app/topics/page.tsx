@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { TopicCard } from "@/components/TopicCard";
 import { recommendedTopics, topics } from "@/data/topics";
 import type { TopicCategory } from "@/types/practice";
@@ -18,8 +19,10 @@ const sections: Array<{
 
 type SectionId = (typeof sections)[number]["id"];
 
-export default function TopicsPage() {
+function TopicsContent() {
   const [activeSection, setActiveSection] = useState<SectionId>("recommended");
+  const searchParams = useSearchParams();
+  const preserveDebug = searchParams.get("debug") === "1";
 
   const visibleTopics = useMemo(() => {
     if (activeSection === "recommended") {
@@ -73,10 +76,18 @@ export default function TopicsPage() {
         </div>
         <div className="grid gap-3">
           {visibleTopics.map((topic) => (
-            <TopicCard key={topic.id} topic={topic} />
+            <TopicCard key={topic.id} preserveDebug={preserveDebug} topic={topic} />
           ))}
         </div>
       </section>
     </main>
+  );
+}
+
+export default function TopicsPage() {
+  return (
+    <Suspense fallback={null}>
+      <TopicsContent />
+    </Suspense>
   );
 }

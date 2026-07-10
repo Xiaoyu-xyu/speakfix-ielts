@@ -5,14 +5,15 @@ import { AssistTabs } from "@/components/AssistTabs";
 import { CompletionModal } from "@/components/CompletionModal";
 import { PracticeHeader } from "@/components/PracticeHeader";
 import {
-  createPreHelpInput,
+  createPreAnswerInput,
   createPolishInput,
+  generatePreAnswerSuggestion,
   generatePolishSuggestion,
-  generatePreHelp,
   generateRetryFeedback,
   type AiServiceResult,
   type ExpansionType,
   type MarkedTranscriptSegment,
+  type PreHelpOutput,
   type PolishResult,
   type RetryFeedbackResult,
 } from "@/lib/ai";
@@ -74,6 +75,14 @@ type AnswerRecord = {
 type RetryTranscriptSegment = {
   text: string;
   type: "normal" | "adopted";
+};
+
+type PreAnswerRecord = {
+  output: PreHelpOutput;
+  aiProvider?: "openai" | "siliconflow";
+  aiSource: "llm" | "mock_fallback";
+  fallbackReason?: string;
+  llmLatencyMs?: number | null;
 };
 
 type SpeechRecognitionLike = {
@@ -482,7 +491,11 @@ function DebugPanel({
   );
   const ttsEvent = events.find((event) => event.event_name === "tts_playback");
   const aiEvent = events.find((event) =>
-    ["polish_generated", "retry_feedback_generated"].includes(event.event_name),
+    [
+      "pre_answer_generated",
+      "polish_generated",
+      "retry_feedback_generated",
+    ].includes(event.event_name),
   );
   const speechPayload = speechEvent?.payload ?? {};
   const ttsPayload = ttsEvent?.payload ?? {};
@@ -611,6 +624,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const [ttsFallbackQuestionIds, setTtsFallbackQuestionIds] = useState<
     string[]
   >([]);
+  const [preAnswerByQuestionId, setPreAnswerByQuestionId] = useState<
+    Record<string, PreAnswerRecord>
+  >({});
+  const [preAnswerLoadingIds, setPreAnswerLoadingIds] = useState<string[]>([]);
 
   const isRecording =
     status === "recording" || status === "retryRecording";
@@ -814,6 +831,43 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
   function wordCount(text: string) {
     return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  async function ensurePreAnswer(questionIndex: number) {
+    const question = topic.questions[questionIndex];
+
+    if (
+      !question ||
+      preAnswerByQuestionId[question.id] ||
+      preAnswerLoadingIds.includes(question.id)
+    ) {
+      return;
+    }
+
+    setPreAnswerLoadingIds((ids) => [...ids, question.id]);
+    const result = await generatePreAnswerSuggestion(
+      createPreAnswerInput(topic, question),
+    );
+
+    setPreAnswerByQuestionId((records) => ({
+      ...records,
+      [question.id]: {
+        output: result.data,
+        aiProvider: result.ai_provider,
+        aiSource: result.ai_source,
+        fallbackReason: result.fallback_reason,
+        llmLatencyMs: result.llm_latency_ms,
+      },
+    }));
+    setPreAnswerLoadingIds((ids) => ids.filter((id) => id !== question.id));
+    trackPracticeEvent("pre_answer_generated", questionIndex, {
+      ai_node: "pre_answer",
+      ai_provider: result.ai_provider,
+      ai_source: result.ai_source,
+      fallback_reason: result.fallback_reason,
+      generation_mode: result.generation_mode,
+      llm_latency_ms: result.llm_latency_ms ?? null,
+    });
   }
 
   function scrollToBottom() {
@@ -1394,6 +1448,8 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     setNotice("");
     submitLockedRef.current = false;
     setTtsFallbackQuestionIds([]);
+    setPreAnswerByQuestionId({});
+    setPreAnswerLoadingIds([]);
     setStatus("idle");
     setShowCompletion(false);
     window.setTimeout(() => {
@@ -1408,9 +1464,9 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     const isCurrentlyAsking = isActiveQuestion && status === "asking";
     const isQuestionPlaying =
       playingQuestionIndex === questionIndex || isCurrentlyAsking;
-    const preHelpOutput = generatePreHelp(
-      createPreHelpInput(topic, question, questionIndex),
-    ).data;
+    const preAnswerRecord = preAnswerByQuestionId[question.id];
+    const preHelpOutput = preAnswerRecord?.output;
+    const preHelpLoading = preAnswerLoadingIds.includes(question.id);
 
     return (
       <div key={`ai-${question.id}`} className="space-y-0">
@@ -1442,7 +1498,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
             }
             question={question}
             preHelpOutput={preHelpOutput}
+            preHelpLoading={preHelpLoading}
             scrollIdBase={`help-${question.id}`}
+            onIdeaRequested={() => {
+              void ensurePreAnswer(questionIndex);
+            }}
             onExpandedChange={(scrollId) => {
               if (scrollId) {
                 const helpType = scrollId.split("-").at(-1);
@@ -1531,7 +1591,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
                 className="mt-1 rounded-xl bg-white/80 px-3 py-2 text-sm font-semibold leading-6 text-slate-500"
                 data-scroll-id={`answer-assist-${answer.id}`}
               >
-                {isRetryAnswer ? "重说反馈生成中…" : "润色扩展生成中…"}
+                {isRetryAnswer ? "AI 正在生成重说反馈..." : "AI 正在生成润色扩展..."}
               </div>
             ) : isRetryAnswer ? (
               <div

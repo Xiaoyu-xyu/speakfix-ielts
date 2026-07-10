@@ -26,6 +26,24 @@ export type PreHelpOutput = {
   caution_zh: string;
 };
 
+export type PreAnswerInput = {
+  topic_id: string;
+  question_id: string;
+  question_text: string;
+  answerStructureType: AnswerStructureType;
+};
+
+export type ApiPreAnswerResponse = {
+  directionZh: string;
+  keywords: string[];
+  sentenceStarters: string[];
+  optionalReminder: string;
+  source: "llm" | "mock_fallback";
+  aiProvider: "openai" | "siliconflow";
+  fallbackReason: string | null;
+  llmLatencyMs: number | null;
+};
+
 export type PolishInput = {
   topic_id: string;
   topic_title: string;
@@ -222,6 +240,79 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
       fallback_reason: "mock_rule",
       llm_latency_ms: null,
   };
+}
+
+function mapApiPreAnswerToPreHelpOutput(
+  result: ApiPreAnswerResponse,
+  answerStructureType: AnswerStructureType,
+): PreHelpOutput {
+  return {
+    answer_structure_type: answerStructureType,
+    answer_direction_zh: result.directionZh,
+    useful_keywords_en: result.keywords,
+    sentence_starter_en: result.sentenceStarters.join(" / "),
+    caution_zh: result.optionalReminder,
+  };
+}
+
+export function createPreAnswerInput(
+  topic: Topic,
+  question: PracticeQuestion,
+): PreAnswerInput {
+  return {
+    topic_id: topic.id,
+    question_id: question.id,
+    question_text: question.text,
+    answerStructureType: question.answerStructureType,
+  };
+}
+
+export async function generatePreAnswerSuggestion(
+  input: PreAnswerInput,
+): Promise<AiServiceResult<PreHelpOutput>> {
+  const fallback = generatePreHelp({
+    topic_title: "",
+    question_id: input.question_id,
+    question_text_en: input.question_text,
+    question_translation_zh: "",
+    question_index: 1,
+    answerStructureType: input.answerStructureType,
+  }).data;
+
+  try {
+    const result = await callAiRoute<ApiPreAnswerResponse>("/api/ai/pre-answer", {
+      topicId: input.topic_id,
+      questionId: input.question_id,
+      questionText: input.question_text,
+      answerStructureType: input.answerStructureType,
+    });
+
+    return {
+      data: mapApiPreAnswerToPreHelpOutput(result, input.answerStructureType),
+      generation_mode: result.source === "llm" ? "ai" : "mock",
+      ai_success: result.source === "llm",
+      fallback_used: result.source === "mock_fallback",
+      failure_reason: result.fallbackReason ?? undefined,
+      ai_source: result.source,
+      ai_provider: result.aiProvider,
+      fallback_reason: result.fallbackReason ?? undefined,
+      llm_latency_ms: result.llmLatencyMs,
+    };
+  } catch (error) {
+    return {
+      data: fallback,
+      generation_mode: "mock",
+      ai_success: false,
+      fallback_used: true,
+      failure_reason:
+        error instanceof Error ? error.message : "pre_answer_failed",
+      ai_source: "mock_fallback",
+      ai_provider: "openai",
+      fallback_reason:
+        error instanceof Error ? error.message : "pre_answer_failed",
+      llm_latency_ms: null,
+    };
+  }
 }
 
 function countEnglishWords(text: string) {
@@ -604,10 +695,9 @@ function createAdoptedRetryFeedback(): RetryFeedbackResult {
 function createMetaExpressionRetryFeedback(
   input: RetryFeedbackInput,
 ): RetryFeedbackResult {
-  const exampleSentence = input.expansion_sentence?.trim();
-  const feedbackText = exampleSentence
-    ? `\u8fd9\u6b21\u6709\u8865\u5145\u610f\u8bc6\uff0c\u4f46\u7b2c\u4e8c\u53e5\u8fd8\u6ca1\u6709\u771f\u6b63\u8bf4\u660e\u539f\u56e0\u3002\u53ef\u4ee5\u76f4\u63a5\u8bf4\uff1a${exampleSentence}`
-    : "\u8fd9\u6b21\u6709\u8865\u5145\u610f\u8bc6\uff0c\u4f46\u7b2c\u4e8c\u53e5\u8fd8\u6ca1\u6709\u771f\u6b63\u8bf4\u660e\u539f\u56e0\u3002\u53ef\u4ee5\u76f4\u63a5\u8bf4\u51fa\u4e00\u4e2a\u771f\u5b9e\u539f\u56e0\u6216\u72b6\u6001\u3002";
+  void input;
+  const feedbackText =
+    "\u8fd9\u53e5\u66f4\u50cf\u662f\u5728\u8bf4\u7b54\u9898\u65b9\u6cd5\uff0c\u8fd8\u6ca1\u6709\u771f\u6b63\u56de\u7b54\u9898\u76ee\u3002\u4e0b\u4e00\u6b21\u53ef\u4ee5\u76f4\u63a5\u8bf4\u4f60\u7684\u7b54\u6848\uff0c\u518d\u8865\u4e00\u53e5\u5177\u4f53\u539f\u56e0\u3002";
 
   return {
     feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,

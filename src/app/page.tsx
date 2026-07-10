@@ -66,7 +66,16 @@ const valuePoints = [
   { label: "可选重说一次", icon: RepeatIcon, iconClass: "text-bamboo-600" },
 ];
 
-export default function HomePage() {
+type HomePageProps = {
+  searchParams?: Promise<{
+    debug?: string;
+  }>;
+};
+
+export default async function HomePage({ searchParams }: HomePageProps) {
+  const params = await searchParams;
+  const topicsHref = params?.debug === "1" ? "/topics?debug=1" : "/topics";
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-[430px] flex-col px-5 py-7">
       <section className="flex flex-1 flex-col">
@@ -103,7 +112,7 @@ export default function HomePage() {
 
         <div className="mt-auto flex flex-col items-center pb-3 pt-10">
           <Link
-            href="/topics"
+            href={topicsHref}
             className="flex h-20 w-20 items-center justify-center rounded-full bg-bamboo-600 text-white shadow-soft transition active:scale-95"
             aria-label="进入题库"
           >
