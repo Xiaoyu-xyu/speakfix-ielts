@@ -262,23 +262,45 @@ function normalizeSpeechFallbackReason(
   recognitionError: string,
 ) {
   if (!recognitionSupported) {
-    return "speech_recognition_unavailable";
+    return "speech_recognition_unsupported";
   }
 
   if (
     recognitionError === "not-allowed" ||
     recognitionError === "service-not-allowed" ||
-    recognitionError === "audio-capture" ||
-    recognitionError === "no_microphone_or_permission_denied"
+    recognitionError === "permission_denied"
   ) {
-    return "no_microphone_or_permission_denied";
+    return "permission_denied";
   }
 
-  if (recognitionError === "speech_recognition_unavailable") {
-    return "speech_recognition_unavailable";
+  if (
+    recognitionError === "audio-capture" ||
+    recognitionError === "no_microphone"
+  ) {
+    return "no_microphone";
   }
 
-  return recognitionError || "no_microphone_or_permission_denied";
+  if (recognitionError === "recognition_empty") {
+    return "recognition_empty";
+  }
+
+  if (recognitionError === "speech_recognition_unsupported") {
+    return "speech_recognition_unsupported";
+  }
+
+  return recognitionError ? "recognition_error" : "recognition_empty";
+}
+
+function getMockFallbackNotice(fallbackReason?: string) {
+  if (fallbackReason === "speech_recognition_unsupported") {
+    return "当前浏览器语音识别不可用，已使用模拟转写继续练习。";
+  }
+
+  if (fallbackReason === "recognition_empty") {
+    return "未识别到有效语音，已使用模拟转写继续练习。";
+  }
+
+  return "已使用模拟转写继续练习。";
 }
 
 function toPolishViewModel(result: AiServiceResult<PolishResult>) {
@@ -442,7 +464,9 @@ function DebugPanel({
       "transcription_failed",
     ].includes(event.event_name),
   );
+  const ttsEvent = events.find((event) => event.event_name === "tts_playback");
   const speechPayload = speechEvent?.payload ?? {};
+  const ttsPayload = ttsEvent?.payload ?? {};
   const debugValue = (payload: Record<string, unknown>, key: string) => {
     const value = payload[key];
 
@@ -479,6 +503,14 @@ function DebugPanel({
           ))}
         </div>
         <div className="rounded-xl bg-amber-50 p-2">
+          <p className="font-bold text-ink">latest TTS</p>
+          <p>tts_status: {debugValue(ttsPayload, "tts_status")}</p>
+          <p>tts_error_reason: {debugValue(ttsPayload, "tts_error_reason")}</p>
+          <p>voice_name: {debugValue(ttsPayload, "voice_name")}</p>
+          <p>voice_lang: {debugValue(ttsPayload, "voice_lang")}</p>
+          <p>is_tts_fallback: {debugValue(ttsPayload, "is_tts_fallback")}</p>
+        </div>
+        <div className="rounded-xl bg-amber-50 p-2">
           <p className="font-bold text-ink">latest speech/transcription</p>
           <p>event_name: {speechEvent?.event_name ?? "missing"}</p>
           <p>input_mode: {debugValue(speechPayload, "input_mode")}</p>
@@ -491,6 +523,10 @@ function DebugPanel({
           </p>
           <p>
             fallback_reason: {debugValue(speechPayload, "fallback_reason")}
+          </p>
+          <p>fallback_mode: {debugValue(speechPayload, "fallback_mode")}</p>
+          <p>
+            recognition_status: {debugValue(speechPayload, "recognition_status")}
           </p>
           <p>answer_text: {debugValue(speechPayload, "answer_text")}</p>
         </div>
@@ -543,6 +579,9 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const [playingQuestionIndex, setPlayingQuestionIndex] = useState<
     number | null
   >(null);
+  const [ttsFallbackQuestionIds, setTtsFallbackQuestionIds] = useState<
+    string[]
+  >([]);
 
   const isRecording =
     status === "recording" || status === "retryRecording";
@@ -594,15 +633,18 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
     if (!SpeechRecognitionConstructor) {
       setRecognitionSupported(false);
-      setRecognitionError("speech_recognition_unavailable");
+      setRecognitionError("speech_recognition_unsupported");
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_available: true,
-        fallback_reason: "speech_recognition_unavailable",
+        fallback_reason: "speech_recognition_unsupported",
+        input_mode: "mock",
+        is_mock_transcription: true,
         recognition_status: "unsupported",
-        reason: "speech_recognition_unavailable",
+        reason: "speech_recognition_unsupported",
+        transcript_source: "mock_fallback",
       });
-      setNotice("\u5f53\u524d\u8bbe\u5907\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u9ea6\u514b\u98ce\uff0c\u5df2\u4f7f\u7528\u6a21\u62df\u8f6c\u5199\u7ee7\u7eed\u7ec3\u4e60\u3002");
+      setNotice("当前浏览器语音识别不可用，已使用模拟转写继续练习。");
       return;
     }
 
@@ -637,13 +679,17 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       };
       recognition.onerror = (event) => {
         const error = event.error ?? "speech_recognition_error";
-        setRecognitionError(error);
+        const fallbackReason = normalizeSpeechFallbackReason(true, error);
+        setRecognitionError(fallbackReason);
         trackPracticeEvent("transcription_failed", currentQuestionIndex, {
           ai_node: "A05_ASR_TRANSCRIPTION",
           fallback_available: true,
-          fallback_reason: normalizeSpeechFallbackReason(true, error),
+          fallback_reason: fallbackReason,
+          input_mode: "mock",
+          is_mock_transcription: true,
           recognition_status: "failed",
           reason: error,
+          transcript_source: "mock_fallback",
         });
 
         if (
@@ -651,10 +697,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
           error === "service-not-allowed" ||
           error === "audio-capture"
         ) {
-          setRecognitionError("no_microphone_or_permission_denied");
-          setNotice(
-            "\u5f53\u524d\u8bbe\u5907\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u9ea6\u514b\u98ce\uff0c\u5df2\u4f7f\u7528\u6a21\u62df\u8f6c\u5199\u7ee7\u7eed\u7ec3\u4e60\u3002",
-          );
+          setNotice("未识别到有效语音，已使用模拟转写继续练习。");
         }
       };
       recognition.onend = () => {
@@ -663,16 +706,19 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       recognition.start();
       recognitionRef.current = recognition;
     } catch {
-      setRecognitionSupported(false);
-      setRecognitionError("speech_recognition_unavailable");
+      setRecognitionSupported(true);
+      setRecognitionError("recognition_error");
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_available: true,
-        fallback_reason: "speech_recognition_unavailable",
+        fallback_reason: "recognition_error",
+        input_mode: "mock",
+        is_mock_transcription: true,
         recognition_status: "failed",
         reason: "speech_recognition_start_failed",
+        transcript_source: "mock_fallback",
       });
-      setNotice("\u5f53\u524d\u8bbe\u5907\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u9ea6\u514b\u98ce\uff0c\u5df2\u4f7f\u7528\u6a21\u62df\u8f6c\u5199\u7ee7\u7eed\u7ec3\u4e60\u3002");
+      setNotice("当前浏览器语音识别不可用，已使用模拟转写继续练习。");
     }
   }
   function refreshDebugEvents() {
@@ -910,18 +956,38 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     questionIndex: number,
     shouldEnableAnswer = false,
   ) {
+    const question = topic.questions[questionIndex];
+
     setPlayingQuestionIndex(questionIndex);
     const result = await speakQuestionText(questionText);
     setPlayingQuestionIndex((activeIndex) =>
       activeIndex === questionIndex ? null : activeIndex,
     );
+    trackPracticeEvent("tts_playback", questionIndex, {
+      ai_node: "A01_TTS_QUESTION",
+      is_tts_fallback: result.status !== "played",
+      question_text_visible_by_user: result.status !== "played",
+      tts_error_reason: result.reason ?? null,
+      tts_source: "browser_speech_synthesis",
+      tts_status: result.status === "played" ? "played" : result.status,
+      voice_lang: result.voiceLang ?? null,
+      voice_name: result.voiceName ?? null,
+    });
 
     if (shouldEnableAnswer) {
       setStatus("readyToAnswer");
     }
 
     if (result.status !== "played") {
-      setNotice("语音播放失败，可点击原文查看题目");
+      if (question) {
+        setTtsFallbackQuestionIds((questionIds) =>
+          questionIds.includes(question.id)
+            ? questionIds
+            : [...questionIds, question.id],
+        );
+        setPendingScrollTargetId(`help-${question.id}-original`);
+      }
+      setNotice("语音播放失败，已为您展开原文，可继续练习。");
     }
   }
 
@@ -986,10 +1052,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_reason: fallbackReason ?? "empty_transcription",
+        fallback_mode: "mock_fallback",
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
         reason: recognitionError || "empty_transcription",
-        recognition_status: "failed",
+        recognition_status: fallbackReason ?? "recognition_empty",
         transcript_source: transcriptSource,
       });
       setNotice("\u6ca1\u6709\u8bc6\u522b\u5230\u6709\u6548\u56de\u7b54\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21\u3002");
@@ -1109,9 +1176,12 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         answer_text: answerText,
         answer_length: answerLength,
         fallback_reason: fallbackReason,
+        fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
-        recognition_status: isMockTranscription ? "fallback_used" : "success",
+        recognition_status: isMockTranscription
+          ? fallbackReason ?? "mock_fallback"
+          : "success",
         recording_duration_seconds: recordedSeconds,
         transcript_source: transcriptSource,
       });
@@ -1148,10 +1218,13 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackPracticeEvent("retry_answer_submitted", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_reason: fallbackReason,
+        fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
         feedback_generation_mode: retryFeedback.generationMode,
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
-        recognition_status: isMockTranscription ? "fallback_used" : "success",
+        recognition_status: isMockTranscription
+          ? fallbackReason ?? "mock_fallback"
+          : "success",
         recording_duration_seconds: recordedSeconds,
         transcript_source: transcriptSource,
         retry_answer_text: answerText,
@@ -1162,7 +1235,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     if (!isMockTranscription) {
       setNotice("");
     } else {
-      setNotice("\u5df2\u4f7f\u7528\u6a21\u62df\u8f6c\u5199\u7ee7\u7eed\u7ec3\u4e60\u3002");
+      setNotice(getMockFallbackNotice(fallbackReason));
     }
   }
 
@@ -1250,6 +1323,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     abortRecognition();
     setNotice("");
     submitLockedRef.current = false;
+    setTtsFallbackQuestionIds([]);
     setStatus("idle");
     setShowCompletion(false);
     window.setTimeout(() => {
@@ -1293,6 +1367,9 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
         {!isCurrentlyAsking && (
           <AssistTabs
+            forcedAssist={
+              ttsFallbackQuestionIds.includes(question.id) ? "original" : null
+            }
             question={question}
             preHelpOutput={preHelpOutput}
             scrollIdBase={`help-${question.id}`}

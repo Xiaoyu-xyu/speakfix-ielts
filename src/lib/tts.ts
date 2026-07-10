@@ -3,9 +3,16 @@ export async function speakQuestionText(
 ): Promise<{
   status: "played" | "failed" | "unsupported";
   reason?: string;
+  voiceName?: string | null;
+  voiceLang?: string | null;
 }> {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-    return { status: "unsupported", reason: "speech_synthesis_unavailable" };
+    return {
+      status: "unsupported",
+      reason: "speech_synthesis_unavailable",
+      voiceName: null,
+      voiceLang: null,
+    };
   }
 
   const voice = await selectPreferredEnglishFemaleVoice();
@@ -13,6 +20,7 @@ export async function speakQuestionText(
   return new Promise((resolve) => {
     try {
       window.speechSynthesis.cancel();
+      let settled = false;
 
       const utterance = new SpeechSynthesisUtterance(questionText);
       utterance.lang = "en-US";
@@ -23,14 +31,44 @@ export async function speakQuestionText(
         utterance.voice = voice;
       }
 
+      const timeoutId = window.setTimeout(() => {
+        finish({
+          status: "failed",
+          reason: "speech_synthesis_timeout",
+          voiceName: voice?.name ?? null,
+          voiceLang: voice?.lang ?? null,
+        });
+      }, 8000);
+
+      function finish(result: {
+        status: "played" | "failed" | "unsupported";
+        reason?: string;
+        voiceName?: string | null;
+        voiceLang?: string | null;
+      }) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        window.clearTimeout(timeoutId);
+        resolve(result);
+      }
+
       utterance.onend = () => {
-        resolve({ status: "played" });
+        finish({
+          status: "played",
+          voiceName: voice?.name ?? null,
+          voiceLang: voice?.lang ?? null,
+        });
       };
 
       utterance.onerror = (event) => {
-        resolve({
+        finish({
           status: "failed",
           reason: event.error || "speech_synthesis_failed",
+          voiceName: voice?.name ?? null,
+          voiceLang: voice?.lang ?? null,
         });
       };
 
@@ -39,6 +77,8 @@ export async function speakQuestionText(
       resolve({
         status: "failed",
         reason: error instanceof Error ? error.message : "speech_synthesis_failed",
+        voiceName: voice?.name ?? null,
+        voiceLang: voice?.lang ?? null,
       });
     }
   });

@@ -1,12 +1,13 @@
 ﻿"use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PreHelpOutput } from "@/lib/ai";
 import type { PracticeQuestion } from "@/types/practice";
 
 type AssistTabsProps = {
   question: PracticeQuestion;
   preHelpOutput: PreHelpOutput;
+  forcedAssist?: AssistId | null;
   scrollIdBase?: string;
   onExpandedChange?: (scrollId?: string, helpType?: AssistId) => void;
 };
@@ -70,12 +71,27 @@ const assists = [
 type AssistId = (typeof assists)[number]["id"];
 
 export function AssistTabs({
+  forcedAssist,
   question,
   preHelpOutput,
   scrollIdBase,
   onExpandedChange,
 }: AssistTabsProps) {
   const [activeAssist, setActiveAssist] = useState<AssistId | null>(null);
+  const appliedForcedAssistRef = useRef<AssistId | null>(null);
+
+  useEffect(() => {
+    if (!forcedAssist || appliedForcedAssistRef.current === forcedAssist) {
+      return;
+    }
+
+    appliedForcedAssistRef.current = forcedAssist;
+    setActiveAssist(forcedAssist);
+    onExpandedChange?.(
+      scrollIdBase ? `${scrollIdBase}-${forcedAssist}` : undefined,
+      forcedAssist,
+    );
+  }, [forcedAssist, onExpandedChange, scrollIdBase]);
 
   function toggleAssist(assistId: AssistId) {
     const nextAssist = activeAssist === assistId ? null : assistId;
