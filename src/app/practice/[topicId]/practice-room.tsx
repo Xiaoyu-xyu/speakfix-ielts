@@ -17,7 +17,7 @@ import {
   type PolishResult,
   type RetryFeedbackResult,
 } from "@/lib/ai";
-import { speakQuestionText } from "@/lib/tts";
+import { playQuestionPromptAudio } from "@/lib/tts";
 import {
   getSpeakfixSessionId,
   readSpeakfixEvents,
@@ -105,6 +105,23 @@ type SpeechRecognitionLike = {
 };
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type AsrApiResponse = {
+  transcript: string;
+  provider: "siliconflow";
+  source: "asr" | "mock_fallback";
+  fallbackReason: string | null;
+  latency: number | null;
+};
+
+type AsrResult = {
+  transcript: string;
+  provider: "siliconflow";
+  source: "asr" | "mock_fallback";
+  fallbackReason?: string;
+  latencyMs: number | null;
+  audioMimeType?: string;
+};
 
 type IconProps = {
   className?: string;
@@ -308,7 +325,42 @@ function normalizeSpeechFallbackReason(
   return recognitionError ? "recognition_error" : "recognition_empty";
 }
 
+function getSupportedRecordingMimeType() {
+  if (typeof window === "undefined" || typeof MediaRecorder === "undefined") {
+    return "";
+  }
+
+  const supportedMimeTypes = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+
+  return (
+    supportedMimeTypes.find((mimeType) =>
+      MediaRecorder.isTypeSupported(mimeType),
+    ) ?? ""
+  );
+}
+
 function getMockFallbackNotice(fallbackReason?: string) {
+  if (fallbackReason === "media_recorder_unsupported") {
+    return "当前浏览器录音能力不稳定，已使用备用转写继续练习。";
+  }
+
+  if (fallbackReason === "permission_denied") {
+    return "未获得麦克风权限，已使用备用转写继续练习。";
+  }
+
+  if (fallbackReason === "asr_request_failed") {
+    return "语音识别暂时不可用，已使用备用转写继续练习。";
+  }
+
+  if (fallbackReason === "empty_audio" || fallbackReason === "empty_transcript") {
+    return "未识别到有效语音，已使用备用转写继续练习。";
+  }
+
   if (fallbackReason === "speech_recognition_unsupported") {
     return "当前浏览器语音识别不可用，已使用模拟转写继续练习。";
   }
@@ -537,6 +589,12 @@ function DebugPanel({
         </div>
         <div className="rounded-xl bg-amber-50 p-2">
           <p className="font-bold text-ink">latest TTS</p>
+          <p>audio_source: {debugValue(ttsPayload, "audio_source")}</p>
+          <p>audio_status: {debugValue(ttsPayload, "audio_status")}</p>
+          <p>audio_src: {debugValue(ttsPayload, "audio_src")}</p>
+          <p>
+            audio_error_reason: {debugValue(ttsPayload, "audio_error_reason")}
+          </p>
           <p>tts_status: {debugValue(ttsPayload, "tts_status")}</p>
           <p>tts_error_reason: {debugValue(ttsPayload, "tts_error_reason")}</p>
           <p>voice_name: {debugValue(ttsPayload, "voice_name")}</p>
@@ -553,6 +611,16 @@ function DebugPanel({
           </p>
           <p>
             transcript_source: {debugValue(speechPayload, "transcript_source")}
+          </p>
+          <p>asr_provider: {debugValue(speechPayload, "asr_provider")}</p>
+          <p>asr_source: {debugValue(speechPayload, "asr_source")}</p>
+          <p>asr_latency_ms: {debugValue(speechPayload, "asr_latency_ms")}</p>
+          <p>
+            audio_mime_type: {debugValue(speechPayload, "audio_mime_type")}
+          </p>
+          <p>
+            audio_duration_seconds:{" "}
+            {debugValue(speechPayload, "audio_duration_seconds")}
           </p>
           <p>
             fallback_reason: {debugValue(speechPayload, "fallback_reason")}
@@ -595,6 +663,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const [interimTranscript, setInterimTranscript] = useState("");
   const [recognitionSupported, setRecognitionSupported] = useState(true);
   const [recognitionError, setRecognitionError] = useState("");
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [notice, setNotice] = useState("");
   const [showCompletion, setShowCompletion] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
@@ -604,6 +673,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputBarRef = useRef<HTMLElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioMimeTypeRef = useRef("");
+  const mediaRecorderErrorRef = useRef("");
   const submitLockedRef = useRef(false);
   const trackedRef = useRef({
     answerSubmitted: new Set<number>(),
@@ -671,6 +745,232 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       // The browser may already have stopped recognition.
     }
     recognitionRef.current = null;
+  }
+
+  function releaseMediaStream() {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+  }
+
+  function createRecordedAudioBlob() {
+    const chunks = audioChunksRef.current.filter((chunk) => chunk.size > 0);
+
+    if (chunks.length === 0) {
+      return null;
+    }
+
+    const mimeType = audioMimeTypeRef.current || chunks[0]?.type || "audio/webm";
+    const audioBlob = new Blob(chunks, { type: mimeType });
+
+    return audioBlob.size > 0 ? audioBlob : null;
+  }
+
+  function stopActiveMediaRecorder() {
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder) {
+      releaseMediaStream();
+      return;
+    }
+
+    if (recorder.state === "recording") {
+      recorder.onstop = () => {
+        releaseMediaStream();
+      };
+      try {
+        recorder.stop();
+      } catch {
+        releaseMediaStream();
+      }
+      return;
+    }
+
+    releaseMediaStream();
+  }
+
+  function discardMediaRecording() {
+    const recorder = mediaRecorderRef.current;
+    audioChunksRef.current = [];
+    audioMimeTypeRef.current = "";
+    mediaRecorderErrorRef.current = "";
+
+    if (recorder?.state === "recording") {
+      recorder.onstop = () => {
+        releaseMediaStream();
+      };
+      try {
+        recorder.stop();
+      } catch {
+        releaseMediaStream();
+      }
+      return;
+    }
+
+    releaseMediaStream();
+  }
+
+  async function stopMediaRecorderForBlob() {
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder) {
+      return createRecordedAudioBlob();
+    }
+
+    if (recorder.state !== "recording") {
+      releaseMediaStream();
+      return createRecordedAudioBlob();
+    }
+
+    return await new Promise<Blob | null>((resolve) => {
+      const fallbackTimeout = window.setTimeout(() => {
+        releaseMediaStream();
+        resolve(createRecordedAudioBlob());
+      }, 1800);
+
+      recorder.onstop = () => {
+        window.clearTimeout(fallbackTimeout);
+        releaseMediaStream();
+        resolve(createRecordedAudioBlob());
+      };
+
+      try {
+        recorder.stop();
+      } catch {
+        window.clearTimeout(fallbackTimeout);
+        releaseMediaStream();
+        resolve(createRecordedAudioBlob());
+      }
+    });
+  }
+
+  async function startMediaRecording() {
+    audioChunksRef.current = [];
+    audioMimeTypeRef.current = "";
+    mediaRecorderErrorRef.current = "";
+    releaseMediaStream();
+
+    if (
+      typeof window === "undefined" ||
+      typeof MediaRecorder === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
+      mediaRecorderErrorRef.current = "media_recorder_unsupported";
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getSupportedRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      audioMimeTypeRef.current = recorder.mimeType || mimeType || "audio/webm";
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        mediaRecorderErrorRef.current = "media_recorder_failed";
+      };
+      recorder.start();
+    } catch (error) {
+      mediaRecorderErrorRef.current =
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "permission_denied"
+          : "media_recorder_failed";
+      releaseMediaStream();
+    }
+  }
+
+  function getAudioFileExtension(mimeType: string) {
+    if (mimeType.includes("mp4")) {
+      return "mp4";
+    }
+
+    if (mimeType.includes("ogg")) {
+      return "ogg";
+    }
+
+    if (mimeType.includes("wav")) {
+      return "wav";
+    }
+
+    return "webm";
+  }
+
+  async function transcribeWithAsr(
+    audioBlob: Blob | null,
+    kind: "first" | "retry",
+    recordedSeconds: number,
+  ): Promise<AsrResult> {
+    const fallbackResult = (
+      fallbackReason: string,
+      latencyMs: number | null = null,
+    ): AsrResult => ({
+      transcript: "",
+      provider: "siliconflow",
+      source: "mock_fallback",
+      fallbackReason,
+      latencyMs,
+      audioMimeType: audioBlob?.type || audioMimeTypeRef.current || "",
+    });
+
+    if (!audioBlob || audioBlob.size === 0) {
+      return fallbackResult(mediaRecorderErrorRef.current || "empty_audio");
+    }
+
+    const formData = new FormData();
+    const mimeType = audioBlob.type || "audio/webm";
+    const extension = getAudioFileExtension(mimeType);
+    formData.append(
+      "audio",
+      audioBlob,
+      `${currentQuestion.id}-${kind}.${extension}`,
+    );
+    formData.append("topicId", topic.id);
+    formData.append("questionId", currentQuestion.id);
+    formData.append("kind", kind);
+    formData.append("durationSeconds", String(recordedSeconds));
+    formData.append("mimeType", mimeType);
+
+    try {
+      const response = await fetch("/api/asr/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        return fallbackResult("asr_request_failed");
+      }
+
+      const result = (await response.json()) as AsrApiResponse;
+      const transcriptText = result.transcript?.trim() ?? "";
+      const source = result.source === "asr" ? "asr" : "mock_fallback";
+
+      if (source === "asr" && transcriptText) {
+        return {
+          transcript: transcriptText,
+          provider: "siliconflow",
+          source: "asr",
+          fallbackReason: undefined,
+          latencyMs: result.latency,
+          audioMimeType: mimeType,
+        };
+      }
+
+      return fallbackResult(
+        result.fallbackReason ?? "empty_transcript",
+        result.latency,
+      );
+    } catch {
+      return fallbackResult("asr_request_failed");
+    }
   }
 
   function startSpeechRecognition() {
@@ -973,6 +1273,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     }
 
     stopRecognition();
+    stopActiveMediaRecorder();
     setNotice("\u672c\u6b21\u5f55\u97f3\u5df2\u5230 120 \u79d2\uff0c\u53ef\u4ee5\u5148\u53d1\u9001\u8fd9\u7248\u56de\u7b54\u3002");
   }, [isRecording, recordingSeconds]);
 
@@ -1042,16 +1343,30 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     const question = topic.questions[questionIndex];
 
     setPlayingQuestionIndex(questionIndex);
-    const result = await speakQuestionText(questionText);
+    const result = question
+      ? await playQuestionPromptAudio({
+          questionId: question.id,
+          questionText,
+          topicId: topic.id,
+        })
+      : await playQuestionPromptAudio({
+          questionId: "",
+          questionText,
+          topicId: topic.id,
+        });
     setPlayingQuestionIndex((activeIndex) =>
       activeIndex === questionIndex ? null : activeIndex,
     );
     trackPracticeEvent("tts_playback", questionIndex, {
       ai_node: "A01_TTS_QUESTION",
-      is_tts_fallback: result.status !== "played",
+      audio_error_reason: result.audioErrorReason ?? null,
+      audio_source: "pre_generated_audio",
+      audio_src: result.audioSrc ?? null,
+      audio_status: result.audioStatus ?? "unsupported",
+      is_tts_fallback: result.source !== "pre_generated_audio",
       question_text_visible_by_user: result.status !== "played",
       tts_error_reason: result.reason ?? null,
-      tts_source: "browser_speech_synthesis",
+      tts_source: result.source,
       tts_status: result.status === "played" ? "played" : result.status,
       voice_lang: result.voiceLang ?? null,
       voice_name: result.voiceName ?? null,
@@ -1084,8 +1399,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   function startRecording() {
     if (status === "readyToAnswer") {
       setNotice("");
+      setIsTranscribing(false);
       submitLockedRef.current = false;
-      // A05_ASR_TRANSCRIPTION: speech transcription input, Web Speech first, Mock fallback.
+      // A05_ASR_TRANSCRIPTION: MediaRecorder ASR first, Web Speech and Mock fallback.
+      void startMediaRecording();
       startSpeechRecognition();
       setStatus("recording");
     }
@@ -1093,7 +1410,9 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
   function cancelRecording() {
     abortRecognition();
+    discardMediaRecording();
     resetSpeechState();
+    setIsTranscribing(false);
     submitLockedRef.current = false;
     setStatus(status === "retryRecording" ? "answered" : "readyToAnswer");
   }
@@ -1105,12 +1424,20 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
     submitLockedRef.current = true;
     const kind = status === "retryRecording" ? "retry" : "first";
+    const recordedSeconds = recordingSeconds;
     stopRecognition();
+    setIsTranscribing(true);
+    setNotice("正在识别你的回答...");
+    const audioBlob = await stopMediaRecorderForBlob();
+    const asrResult = await transcribeWithAsr(audioBlob, kind, recordedSeconds);
+    setIsTranscribing(false);
     const firstAnswer = answers.find(
       (answer) =>
         answer.questionIndex === currentQuestionIndex && answer.kind === "first",
     );
 
+    const asrTranscript =
+      asrResult.source === "asr" ? asrResult.transcript.trim() : "";
     const realTranscript = transcript.trim();
     const interimFallback = interimTranscript.trim();
     const mockTranscript = getMockAnswer(
@@ -1118,18 +1445,36 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       kind,
       firstAnswer?.polish?.expansionSentence,
     );
-    const hasRealTranscript = Boolean(realTranscript || interimFallback);
-    const answerText = realTranscript || interimFallback || mockTranscript;
-    const transcriptSource = realTranscript
-      ? "web_speech_final"
-      : interimFallback
-        ? "web_speech_interim_fallback"
-        : "mock_fallback";
-    const inputMode = hasRealTranscript ? "web_speech" : "mock";
+    const hasRealTranscript = Boolean(
+      asrTranscript || realTranscript || interimFallback,
+    );
+    const answerText =
+      asrTranscript || realTranscript || interimFallback || mockTranscript;
+    const transcriptSource = asrTranscript
+      ? "siliconflow_asr"
+      : realTranscript
+        ? "web_speech_final"
+        : interimFallback
+          ? "web_speech_interim_fallback"
+          : "mock_fallback";
+    const inputMode = asrTranscript
+      ? "asr"
+      : realTranscript || interimFallback
+        ? "web_speech"
+        : "mock";
     const isMockTranscription = !hasRealTranscript;
-    const fallbackReason = isMockTranscription
-      ? normalizeSpeechFallbackReason(recognitionSupported, recognitionError)
-      : undefined;
+    const fallbackReason =
+      asrTranscript || asrResult.source === "asr"
+        ? undefined
+        : asrResult.fallbackReason ??
+          (isMockTranscription
+            ? normalizeSpeechFallbackReason(recognitionSupported, recognitionError)
+            : undefined);
+    const recognitionStatus = asrTranscript
+      ? "success"
+      : realTranscript || interimFallback
+        ? "web_speech_fallback"
+        : fallbackReason ?? "mock_fallback";
 
     if (!answerText.trim()) {
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
@@ -1139,7 +1484,12 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
         reason: recognitionError || "empty_transcription",
-        recognition_status: fallbackReason ?? "recognition_empty",
+        recognition_status: recognitionStatus,
+        asr_provider: asrResult.provider,
+        asr_source: asrResult.source,
+        asr_latency_ms: asrResult.latencyMs,
+        audio_mime_type: asrResult.audioMimeType,
+        audio_duration_seconds: recordedSeconds,
         transcript_source: transcriptSource,
       });
       setNotice("\u6ca1\u6709\u8bc6\u522b\u5230\u6709\u6548\u56de\u7b54\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21\u3002");
@@ -1150,7 +1500,6 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
     const answerLength = wordCount(answerText);
     const answerId = `${currentQuestion.id}-${kind}-${Date.now()}`;
-    const recordedSeconds = recordingSeconds;
     const answerDuration = Math.max(recordedSeconds, 4);
     setAnswers((prevAnswers) => [
       ...prevAnswers,
@@ -1284,9 +1633,12 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
-        recognition_status: isMockTranscription
-          ? fallbackReason ?? "mock_fallback"
-          : "success",
+        recognition_status: recognitionStatus,
+        asr_provider: asrResult.provider,
+        asr_source: asrResult.source,
+        asr_latency_ms: asrResult.latencyMs,
+        audio_mime_type: asrResult.audioMimeType,
+        audio_duration_seconds: recordedSeconds,
         recording_duration_seconds: recordedSeconds,
         transcript_source: transcriptSource,
       });
@@ -1346,9 +1698,12 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         feedback_generation_mode: retryFeedback.generationMode,
         input_mode: inputMode,
         is_mock_transcription: isMockTranscription,
-        recognition_status: isMockTranscription
-          ? fallbackReason ?? "mock_fallback"
-          : "success",
+        recognition_status: recognitionStatus,
+        asr_provider: asrResult.provider,
+        asr_source: asrResult.source,
+        asr_latency_ms: asrResult.latencyMs,
+        audio_mime_type: asrResult.audioMimeType,
+        audio_duration_seconds: recordedSeconds,
         recording_duration_seconds: recordedSeconds,
         transcript_source: transcriptSource,
         retry_answer_text: answerText,
@@ -1402,8 +1757,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackedRef.current.retryClicked.add(currentQuestionIndex);
       trackPracticeEvent("retry_clicked", currentQuestionIndex);
       setNotice("");
+      setIsTranscribing(false);
       submitLockedRef.current = false;
-      // A05_ASR_TRANSCRIPTION: speech transcription input, Web Speech first, Mock fallback.
+      // A05_ASR_TRANSCRIPTION: MediaRecorder ASR first, Web Speech and Mock fallback.
+      void startMediaRecording();
       startSpeechRecognition();
       setStatus("retryRecording");
     }
@@ -1445,6 +1802,8 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     setRecordingSeconds(0);
     resetSpeechState();
     abortRecognition();
+    discardMediaRecording();
+    setIsTranscribing(false);
     setNotice("");
     submitLockedRef.current = false;
     setTtsFallbackQuestionIds([]);
@@ -1778,13 +2137,16 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
               </button>
               <div className="text-center">
                 <p className="text-sm font-bold text-ink">
-                  录音中 {formatTime(recordingSeconds)}
+                  {isTranscribing
+                    ? "正在识别你的回答..."
+                    : `录音中 ${formatTime(recordingSeconds)}`}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={submitRecording}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-bamboo-600 text-white"
+                disabled={isTranscribing}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-bamboo-600 text-white disabled:bg-slate-300"
                 aria-label="\u53d1\u9001\u5f55\u97f3"
               >
                 <SendIcon className="h-5 w-5" />
