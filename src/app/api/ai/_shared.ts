@@ -1,5 +1,5 @@
 import {
-  generatePreHelp,
+  createMockPreAnswerOutput,
   createMockPolishResult,
   createMockRetryFeedbackResult,
   type ApiPreAnswerResponse,
@@ -221,14 +221,7 @@ export function createPreAnswerFallbackResponse(
   fallbackReason: FallbackReason,
   llmLatencyMs: number | null,
 ): ApiPreAnswerResponse {
-  const mockResult = generatePreHelp({
-    topic_title: "",
-    question_id: input.question_id,
-    question_text_en: input.question_text,
-    question_translation_zh: "",
-    question_index: 1,
-    answerStructureType: input.answerStructureType,
-  }).data;
+  const mockResult = createMockPreAnswerOutput(input);
 
   return {
     directionZh: mockResult.answer_direction_zh,
@@ -256,6 +249,7 @@ export function validatePreAnswerApiResponse(
     value.keywords.length < 3 ||
     value.keywords.length > 5 ||
     !value.keywords.every(isNonEmptyString) ||
+    value.keywords.some(isGenericPreAnswerKeyword) ||
     !Array.isArray(value.sentenceStarters) ||
     value.sentenceStarters.length < 1 ||
     value.sentenceStarters.length > 2 ||
@@ -277,6 +271,31 @@ export function validatePreAnswerApiResponse(
     fallbackReason: null,
     llmLatencyMs: null,
   };
+}
+
+function isGenericPreAnswerKeyword(keyword: unknown) {
+  if (typeof keyword !== "string") {
+    return true;
+  }
+
+  const genericLabels = new Set([
+    "age",
+    "feel",
+    "feeling",
+    "life",
+    "reason",
+    "example",
+    "frequency",
+    "place",
+    "preference",
+    "opinion",
+    "experience",
+    "comparison",
+    "background",
+    "detail",
+  ]);
+
+  return genericLabels.has(keyword.trim().toLowerCase());
 }
 
 export async function generatePreAnswerWithLlm(
@@ -634,8 +653,12 @@ Rules:
 - Do not mention Band scores or scoring.
 - Keep the tone light, practical, and encouraging.
 - directionZh must be Chinese, at most 30 Chinese characters.
-- keywords must contain 3-5 simple English words or short phrases.
-- sentenceStarters must contain 1-2 short English sentence starters, with blanks or replaceable parts.
+- keywords must contain 3-5 content words or short phrases the user can directly use in an answer.
+- keywords must not be category labels or answer dimensions. Do not output labels such as "age", "feel", "life", "reason", "example", "frequency", "place", "preference", "opinion", or "experience".
+- For "How old are you?", good keywords are like "twenty-three", "university student", "busy but meaningful"; bad keywords are "age", "feel", "life".
+- Keywords should cover speakable content and should not completely repeat sentenceStarters.
+- sentenceStarters must contain 1-2 short English sentence starters, with blanks or replaceable parts. They should be half-open templates, not complete answers.
+- For example: "I am ___ years old, and I feel ___ about my age."
 - optionalReminder must be a short Chinese reminder.
 - Stay close to the question and answerStructureType.
 

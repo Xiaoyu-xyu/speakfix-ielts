@@ -242,6 +242,95 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
   };
 }
 
+function createContentKeywordsForPreAnswer(input: PreAnswerInput) {
+  const questionText = input.question_text.toLowerCase();
+
+  if (/\bhow old\b/.test(questionText)) {
+    return ["twenty-three", "student life", "busy but meaningful"];
+  }
+
+  if (/\bwhere do you live|hometown|city\b/.test(questionText)) {
+    return ["in Shanghai", "busy city", "convenient daily life"];
+  }
+
+  if (/\bworking or studying|what do you do|study|work\b/.test(questionText)) {
+    return ["university student", "practical skills", "daily classes"];
+  }
+
+  if (/\bclothes|wear|t-shirt|jeans\b/.test(questionText)) {
+    return ["T-shirts", "comfortable clothes", "easy to match"];
+  }
+
+  if (/\bheadphones|music\b/.test(questionText)) {
+    return ["on the bus", "focus better", "relaxing music"];
+  }
+
+  if (/\bshopping|buy\b/.test(questionText)) {
+    return ["online shopping", "save time", "better choices"];
+  }
+
+  if (/\bpark|place|library|school\b/.test(questionText)) {
+    return ["quiet place", "fresh air", "close to home"];
+  }
+
+  if (/\bwebsite|social media|internet\b/.test(questionText)) {
+    return ["short videos", "useful information", "everyday habit"];
+  }
+
+  if (input.answerStructureType === "preference_reason") {
+    return ["comfortable choice", "easy to use", "more relaxing"];
+  }
+
+  if (input.answerStructureType === "frequency_situation") {
+    return ["almost every day", "after class", "with my friends"];
+  }
+
+  if (input.answerStructureType === "experience_example") {
+    return ["last weekend", "a simple example", "with my family"];
+  }
+
+  return ["daily life", "simple reason", "comfortable feeling"];
+}
+
+function createSentenceStartersForPreAnswer(input: PreAnswerInput) {
+  const questionText = input.question_text.toLowerCase();
+
+  if (/\bhow old\b/.test(questionText)) {
+    return "I am ___ years old, and I feel ___ about my age.";
+  }
+
+  if (/\bwhere do you live|hometown|city\b/.test(questionText)) {
+    return "I live in ___, and it is ___ for daily life.";
+  }
+
+  if (/\bdo you like|do you enjoy\b/.test(questionText)) {
+    return "Yes, I do, mainly because ___.";
+  }
+
+  if (/\bhow often|often\b/.test(questionText)) {
+    return "I usually ___, especially when ___.";
+  }
+
+  return "I would say ___, because ___.";
+}
+
+export function createMockPreAnswerOutput(
+  input: PreAnswerInput,
+): PreHelpOutput {
+  const template = preHelpByStructure[input.answerStructureType] ?? {
+    answer_direction_zh: "先直接回答，再补一句细节。",
+    caution_zh: "",
+  };
+
+  return {
+    answer_structure_type: input.answerStructureType,
+    answer_direction_zh: template.answer_direction_zh.replace(/。$/, ""),
+    useful_keywords_en: createContentKeywordsForPreAnswer(input),
+    sentence_starter_en: createSentenceStartersForPreAnswer(input),
+    caution_zh: "",
+  };
+}
+
 function mapApiPreAnswerToPreHelpOutput(
   result: ApiPreAnswerResponse,
   answerStructureType: AnswerStructureType,
@@ -270,14 +359,7 @@ export function createPreAnswerInput(
 export async function generatePreAnswerSuggestion(
   input: PreAnswerInput,
 ): Promise<AiServiceResult<PreHelpOutput>> {
-  const fallback = generatePreHelp({
-    topic_title: "",
-    question_id: input.question_id,
-    question_text_en: input.question_text,
-    question_translation_zh: "",
-    question_index: 1,
-    answerStructureType: input.answerStructureType,
-  }).data;
+  const fallback = createMockPreAnswerOutput(input);
 
   try {
     const result = await callAiRoute<ApiPreAnswerResponse>("/api/ai/pre-answer", {

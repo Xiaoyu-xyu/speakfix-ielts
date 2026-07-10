@@ -172,11 +172,6 @@ export function AssistTabs({
                 <p className="rounded-xl bg-white px-3 py-2 text-bamboo-700">
                   {"\u77ed\u53e5\u652f\u67b6\uff1a"}{preHelpOutput.sentence_starter_en}
                 </p>
-                {preHelpOutput.caution_zh && (
-                  <p className="text-xs font-semibold text-slate-500">
-                    {"\u63d0\u9192\uff1a"}{preHelpOutput.caution_zh}
-                  </p>
-                )}
               </div>
             )
           )}
