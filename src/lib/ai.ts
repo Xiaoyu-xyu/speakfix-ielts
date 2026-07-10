@@ -136,6 +136,19 @@ export type AiServiceResult<T> = {
   llm_latency_ms?: number | null;
 };
 
+type Part1Intent =
+  | "age"
+  | "living_place"
+  | "work_study"
+  | "preference"
+  | "frequency"
+  | "experience"
+  | "opinion"
+  | "choice"
+  | "place"
+  | "type"
+  | "basic";
+
 const preHelpByStructure: Record<
   AnswerStructureType,
   Omit<PreHelpOutput, "answer_structure_type">
@@ -243,88 +256,77 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
 }
 
 function createContentKeywordsForPreAnswer(input: PreAnswerInput) {
-  const questionText = input.question_text.toLowerCase();
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
-  if (/\bhow old\b/.test(questionText)) {
-    return ["twenty-three", "student life", "busy but meaningful"];
-  }
+  const keywordsByIntent: Record<Part1Intent, string[]> = {
+    age: ["exact age", "student", "working life", "feel mature", "still young"],
+    living_place: [
+      "city name",
+      "hometown",
+      "near my school",
+      "close to work",
+      "quiet area",
+    ],
+    work_study: ["student", "working life", "daily routine", "practical skills"],
+    preference: ["relaxing", "interesting", "easy to start", "with friends"],
+    frequency: ["every day", "on weekends", "after class", "when I have time"],
+    experience: ["once or twice", "last weekend", "a simple example", "with family"],
+    opinion: ["useful", "important", "convenient", "good for daily life"],
+    choice: ["more convenient", "easier for me", "more relaxing", "better choice"],
+    place: ["quiet area", "fresh air", "nearby place", "comfortable space"],
+    type: ["simple style", "daily use", "comfortable choice", "easy to find"],
+    basic: ["daily life", "simple reason", "comfortable feeling", "current situation"],
+  };
 
-  if (/\bwhere do you live|hometown|city\b/.test(questionText)) {
-    return ["in Shanghai", "busy city", "convenient daily life"];
-  }
-
-  if (/\bworking or studying|what do you do|study|work\b/.test(questionText)) {
-    return ["university student", "practical skills", "daily classes"];
-  }
-
-  if (/\bclothes|wear|t-shirt|jeans\b/.test(questionText)) {
-    return ["T-shirts", "comfortable clothes", "easy to match"];
-  }
-
-  if (/\bheadphones|music\b/.test(questionText)) {
-    return ["on the bus", "focus better", "relaxing music"];
-  }
-
-  if (/\bshopping|buy\b/.test(questionText)) {
-    return ["online shopping", "save time", "better choices"];
-  }
-
-  if (/\bpark|place|library|school\b/.test(questionText)) {
-    return ["quiet place", "fresh air", "close to home"];
-  }
-
-  if (/\bwebsite|social media|internet\b/.test(questionText)) {
-    return ["short videos", "useful information", "everyday habit"];
-  }
-
-  if (input.answerStructureType === "preference_reason") {
-    return ["comfortable choice", "easy to use", "more relaxing"];
-  }
-
-  if (input.answerStructureType === "frequency_situation") {
-    return ["almost every day", "after class", "with my friends"];
-  }
-
-  if (input.answerStructureType === "experience_example") {
-    return ["last weekend", "a simple example", "with my family"];
-  }
-
-  return ["daily life", "simple reason", "comfortable feeling"];
+  return keywordsByIntent[intent];
 }
 
 function createSentenceStartersForPreAnswer(input: PreAnswerInput) {
-  const questionText = input.question_text.toLowerCase();
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
-  if (/\bhow old\b/.test(questionText)) {
-    return "I am ___ years old, and I feel ___ about my age.";
-  }
+  const startersByIntent: Record<Part1Intent, string> = {
+    age: "I'm ___ years old. / I'm ___ years old, and I feel ___.",
+    living_place: "I live in ___, and it is ___. / I live near ___.",
+    work_study: "I'm currently ___. / At the moment, I ___.",
+    preference: "Yes, I do, mainly because ___. / Not really, because ___.",
+    frequency: "I usually ___, especially when ___.",
+    experience: "Yes, I have. For example, ___. / Not really, but ___.",
+    opinion: "I think ___, because ___.",
+    choice: "I prefer ___ because ___.",
+    place: "It is ___, and I like it because ___.",
+    type: "I usually like ___, because ___.",
+    basic: "I would say ___, because ___.",
+  };
 
-  if (/\bwhere do you live|hometown|city\b/.test(questionText)) {
-    return "I live in ___, and it is ___ for daily life.";
-  }
+  return startersByIntent[intent];
+}
 
-  if (/\bdo you like|do you enjoy\b/.test(questionText)) {
-    return "Yes, I do, mainly because ___.";
-  }
+function createDirectionForPreAnswer(input: PreAnswerInput) {
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
-  if (/\bhow often|often\b/.test(questionText)) {
-    return "I usually ___, especially when ___.";
-  }
+  const directionsByIntent: Record<Part1Intent, string> = {
+    age: "???????????",
+    living_place: "????????????",
+    work_study: "???????????",
+    preference: "??????????",
+    frequency: "???????????",
+    experience: "???????????",
+    opinion: "???????????",
+    choice: "???????????",
+    place: "???????????",
+    type: "????????????",
+    basic: "????????????",
+  };
 
-  return "I would say ___, because ___.";
+  return directionsByIntent[intent];
 }
 
 export function createMockPreAnswerOutput(
   input: PreAnswerInput,
 ): PreHelpOutput {
-  const template = preHelpByStructure[input.answerStructureType] ?? {
-    answer_direction_zh: "先直接回答，再补一句细节。",
-    caution_zh: "",
-  };
-
   return {
     answer_structure_type: input.answerStructureType,
-    answer_direction_zh: template.answer_direction_zh.replace(/。$/, ""),
+    answer_direction_zh: createDirectionForPreAnswer(input),
     useful_keywords_en: createContentKeywordsForPreAnswer(input),
     sentence_starter_en: createSentenceStartersForPreAnswer(input),
     caution_zh: "",
@@ -399,6 +401,58 @@ export async function generatePreAnswerSuggestion(
 
 function countEnglishWords(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function getPart1Intent(
+  questionText: string,
+  answerStructureType?: AnswerStructureType,
+): Part1Intent {
+  const text = questionText.toLowerCase();
+
+  if (/\bhow old\b/.test(text)) {
+    return "age";
+  }
+
+  if (/\bwhere do you live|hometown|city|house or an apartment\b/.test(text)) {
+    return "living_place";
+  }
+
+  if (/\bworking or studying|what do you do|study|work\b/.test(text)) {
+    return "work_study";
+  }
+
+  if (/\bhow often|do you often|usually|every day\b/.test(text)) {
+    return "frequency";
+  }
+
+  if (/\bhave you ever|when did you last|did you\b/.test(text)) {
+    return "experience";
+  }
+
+  if (/\bprefer|rather\b/.test(text) || answerStructureType === "choice_compare") {
+    return "choice";
+  }
+
+  if (
+    /\bdo you like|do you enjoy|what kind of|favourite|favorite\b/.test(text) ||
+    answerStructureType === "preference_reason"
+  ) {
+    return "preference";
+  }
+
+  if (/\bdo you think|should|important|why\b/.test(text)) {
+    return "opinion";
+  }
+
+  if (answerStructureType === "place_description") {
+    return "place";
+  }
+
+  if (answerStructureType === "type_reason") {
+    return "type";
+  }
+
+  return "basic";
 }
 
 function createMarkedTranscript(userAnswer: string): MarkedTranscriptSegment[] {
@@ -543,11 +597,25 @@ function getSafeExpansionType(input: PolishInput): ExpansionType {
 }
 
 function createSafePolish(input: PolishInput): PolishResult {
+  if (hasMetaAnswerExpression(input.user_answer)) {
+    return {
+      markedTranscript: [{ text: input.user_answer, type: "improve" }],
+      polishedAnswer: input.user_answer.trim(),
+      noPolishNeeded: false,
+      shouldExpand: true,
+      expansionType: getExpansionType("preference_reason"),
+      expansionSentence: createSafeExpansionSentence(input, getSafeExpansionType(input)),
+      reason:
+        "This sounds more like an answering method, so next time answer the question directly and add one concrete reason.",
+    };
+  }
+
   const polishedAnswer = createSafePolishedAnswer(input);
   const answerWordCount = countEnglishWords(polishedAnswer);
   const noPolishNeeded = isClearNaturalAnswer(input.user_answer, polishedAnswer);
+  const answeredCoreButShort = isCoreAnswerButShort(input, polishedAnswer);
   const shouldExpand =
-    noPolishNeeded || input.answerStructureType === "basic_fact"
+    noPolishNeeded || answeredCoreButShort || input.answerStructureType === "basic_fact"
       ? answerWordCount < 20
       : answerWordCount < 12;
   const expansionType = shouldExpand
@@ -556,8 +624,8 @@ function createSafePolish(input: PolishInput): PolishResult {
 
   return {
     markedTranscript: createMarkedTranscript(input.user_answer),
-    polishedAnswer: noPolishNeeded ? "" : polishedAnswer,
-    noPolishNeeded,
+    polishedAnswer: noPolishNeeded || answeredCoreButShort ? "" : polishedAnswer,
+    noPolishNeeded: noPolishNeeded || answeredCoreButShort,
     shouldExpand,
     expansionType,
     expansionSentence: shouldExpand
@@ -566,7 +634,7 @@ function createSafePolish(input: PolishInput): PolishResult {
         : createSafeExpansionSentence(input, expansionType)
       : "",
     reason: shouldExpand
-      ? "The answer is short, so one light extension can make it easier to speak."
+      ? "This already answers the core question, and one simple detail can make it more like a Part 1 short answer."
       : "The answer already has enough basic information for a short Part 1 response.",
   };
 }
@@ -628,6 +696,43 @@ function isClearNaturalAnswer(userAnswer: string, polishedAnswer: string) {
   return countEnglishWords(userAnswer) >= 8;
 }
 
+function isCoreAnswerButShort(input: PolishInput, polishedAnswer: string) {
+  const normalizedAnswer = normalizeComparableText(input.user_answer);
+  const wordCountValue = countEnglishWords(input.user_answer);
+
+  if (!normalizedAnswer || wordCountValue > 8) {
+    return false;
+  }
+
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (
+    intent === "age" &&
+    (/\b\d{1,2}\b/.test(normalizedAnswer) ||
+      /\bi'?m \d{1,2} years old\b/.test(normalizedAnswer))
+  ) {
+    return true;
+  }
+
+  if (
+    intent === "living_place" &&
+    /\b(i live|live in|hometown|city|now)\b/.test(normalizedAnswer)
+  ) {
+    return true;
+  }
+
+  if (
+    ["preference", "opinion", "frequency", "experience", "choice"].includes(intent) &&
+    /^(yes|no|not really|yeah|sometimes|usually|i do|i dont|i don't)\b/.test(
+      normalizedAnswer,
+    )
+  ) {
+    return true;
+  }
+
+  return normalizeComparableText(polishedAnswer) === normalizedAnswer;
+}
+
 function normalizeComparableText(text: string) {
   return text
     .toLowerCase()
@@ -640,6 +745,40 @@ function createSafeExpansionSentence(
   input: PolishInput,
   expansionType: ExpansionType,
 ) {
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (intent === "age") {
+    return "I feel I am still young, but I am becoming more independent.";
+  }
+
+  if (intent === "living_place") {
+    return "It is convenient for my daily life, and I feel comfortable living there.";
+  }
+
+  if (intent === "work_study") {
+    return "It is part of my daily routine, and I am learning useful things from it.";
+  }
+
+  if (intent === "preference") {
+    return "The main reason is that it feels relaxing and easy for me.";
+  }
+
+  if (intent === "frequency") {
+    return "I usually do this when I have free time or after a busy day.";
+  }
+
+  if (intent === "experience") {
+    return "For example, I remember doing it once in a simple everyday situation.";
+  }
+
+  if (intent === "opinion") {
+    return "I think it is useful because it can make daily life a little easier.";
+  }
+
+  if (intent === "choice") {
+    return "Compared with the other option, it feels more convenient for me.";
+  }
+
   if (input.answerStructureType === "basic_fact") {
     if (/how old/i.test(input.question_text)) {
       return "I'm at an age where I'm still learning and trying new things.";

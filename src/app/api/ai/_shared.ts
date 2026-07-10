@@ -254,6 +254,7 @@ export function validatePreAnswerApiResponse(
     value.sentenceStarters.length < 1 ||
     value.sentenceStarters.length > 2 ||
     !value.sentenceStarters.every(isNonEmptyString) ||
+    value.sentenceStarters.some(isUnclearPreAnswerStarter) ||
     typeof value.optionalReminder !== "string"
   ) {
     return null;
@@ -278,6 +279,7 @@ function isGenericPreAnswerKeyword(keyword: unknown) {
     return true;
   }
 
+  const normalized = keyword.trim().toLowerCase();
   const genericLabels = new Set([
     "age",
     "feel",
@@ -293,9 +295,28 @@ function isGenericPreAnswerKeyword(keyword: unknown) {
     "comparison",
     "background",
     "detail",
+    "shanghai",
+    "beijing",
+    "twenty-three",
+    "twenty two",
+    "twenty-two",
+    "twenty one",
+    "twenty-one",
   ]);
 
-  return genericLabels.has(keyword.trim().toLowerCase());
+  if (genericLabels.has(normalized)) {
+    return true;
+  }
+
+  return /\b\d{1,2}\b/.test(normalized);
+}
+
+function isUnclearPreAnswerStarter(starter: unknown) {
+  return (
+    typeof starter !== "string" ||
+    /\bi['’]?m in my _+s\b/i.test(starter) ||
+    /\bi am in my _+s\b/i.test(starter)
+  );
 }
 
 export async function generatePreAnswerWithLlm(
@@ -596,6 +617,11 @@ Product boundary:
 - Do not mark natural spoken phrases as errors. Phrases like "in Shanghai" and "usually like" are normally fine.
 - Keep the tone low-pressure and coach-like. Avoid harsh wording such as "serious error", "must change", "wrong answer", or "do not say this".
 - If something can be improved, think in terms of "This can sound a little more natural" or "If the user wants a fuller answer, add one simple reason".
+- Judge from the user's original answer first, not only from the question.
+- If the user's answer has a clear grammar problem, lightly correct it.
+- If the user's answer is natural but short, do not pretend it needs a big rewrite. Set hasMeaningfulPolish to false, keep the polished answer very close to the original, and use extensionSentence to add one simple reason, feeling, example, or situation.
+- If the user's answer is off-topic, too empty, or only describes an answering method, guide gently: it has not really answered the question yet, so next time answer directly and add one concrete reason.
+- Short core answers such as "I'm 23 years old.", "I live in Shanghai now.", "Yes, I do.", or "Not really." answer the core question but are still short. Do not say the structure is complete; provide one related extension sentence.
 
 Marking rules:
 - originalSegments must cover the user's transcript in order.
@@ -651,14 +677,26 @@ Rules:
 - Do not answer for the user.
 - Do not write a model answer or long paragraph.
 - Do not mention Band scores or scoring.
+- Do not invent or imply unknown personal facts, such as a concrete age, city, job, school, name, identity, experience, or preference.
 - Keep the tone light, practical, and encouraging.
 - directionZh must be Chinese, at most 30 Chinese characters.
+- directionZh must give a concrete speaking path in the form "first say X, then add Y". It must match sentenceStarters.
+- Use these common paths:
+  age: first say age, then add one feeling.
+  living place: first say city/place, then add one reason or feeling.
+  preference: first say like/dislike, then add one reason.
+  frequency: first say frequency, then add one situation.
+  experience: first say yes/no experience, then add one example.
+  opinion: first say opinion, then add one reason.
 - keywords must contain 3-5 content words or short phrases the user can directly use in an answer.
 - keywords must not be category labels or answer dimensions. Do not output labels such as "age", "feel", "life", "reason", "example", "frequency", "place", "preference", "opinion", or "experience".
-- For "How old are you?", good keywords are like "twenty-three", "university student", "busy but meaningful"; bad keywords are "age", "feel", "life".
+- Keywords should be replaceable content directions when the user's real information is unknown.
+- For "How old are you?", good keywords are like "exact age", "early twenties", "student", "working life", "feel mature", "still young"; bad keywords are "twenty-three", "age", "feel", "life".
+- For "Where do you live?", good keywords are like "city name", "hometown", "near my school", "close to work", "quiet area"; bad keywords are "Shanghai", "Beijing", or any specific city the user did not provide.
 - Keywords should cover speakable content and should not completely repeat sentenceStarters.
 - sentenceStarters must contain 1-2 short English sentence starters, with blanks or replaceable parts. They should be half-open templates, not complete answers.
-- For example: "I am ___ years old, and I feel ___ about my age."
+- Avoid expressions that are not intuitive for beginners, such as "I'm in my __s".
+- For age questions, use simple templates like "I’m ___ years old." and "I’m ___ years old, and I feel ___."
 - optionalReminder must be a short Chinese reminder.
 - Stay close to the question and answerStructureType.
 
