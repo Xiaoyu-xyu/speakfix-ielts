@@ -55,6 +55,7 @@ type AnswerRecord = {
     fallbackUsed: boolean;
     failureReason?: string;
     aiSource: "llm" | "mock_fallback";
+    aiProvider?: "openai" | "siliconflow";
     fallbackReason?: string;
     llmLatencyMs?: number | null;
   };
@@ -63,6 +64,7 @@ type AnswerRecord = {
     text: string;
     generationMode: "mock" | "ai";
     aiSource: "llm" | "mock_fallback";
+    aiProvider?: "openai" | "siliconflow";
     fallbackReason?: string;
     llmLatencyMs?: number | null;
     markedRetryTranscript: RetryTranscriptSegment[];
@@ -337,6 +339,7 @@ function toPolishViewModel(result: AiServiceResult<PolishResult>) {
     fallbackUsed: result.fallback_used,
     failureReason: result.failure_reason,
     aiSource: result.ai_source,
+    aiProvider: result.ai_provider,
     fallbackReason: result.fallback_reason,
     llmLatencyMs: result.llm_latency_ms,
   };
@@ -351,6 +354,7 @@ function toRetryFeedbackViewModel(
     text: result.data.feedback_text,
     generationMode: result.generation_mode,
     aiSource: result.ai_source,
+    aiProvider: result.ai_provider,
     fallbackReason: result.fallback_reason,
     llmLatencyMs: result.llm_latency_ms,
     markedRetryTranscript,
@@ -550,6 +554,7 @@ function DebugPanel({
           <p className="font-bold text-ink">latest A03/A04 AI</p>
           <p>event_name: {aiEvent?.event_name ?? "missing"}</p>
           <p>ai_node: {debugValue(aiPayload, "ai_node")}</p>
+          <p>ai_provider: {debugValue(aiPayload, "ai_provider")}</p>
           <p>ai_source: {debugValue(aiPayload, "ai_source")}</p>
           <p>fallback_reason: {debugValue(aiPayload, "fallback_reason")}</p>
           <p>llm_latency_ms: {debugValue(aiPayload, "llm_latency_ms")}</p>
@@ -1162,6 +1167,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     ) {
       trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
         ai_node: "polish",
+        ai_provider: polishResult?.ai_provider,
         ai_source: polishResult?.ai_source ?? "mock_fallback",
         fallback_reason:
           polishResult?.fallback_reason ??
@@ -1181,6 +1187,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     if (kind === "retry" && retryFeedbackResult?.fallback_used) {
       trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
         ai_node: "retry_feedback",
+        ai_provider: retryFeedbackResult.ai_provider,
         ai_source: retryFeedbackResult.ai_source,
         fallback_reason:
           retryFeedbackResult.fallback_reason ??
@@ -1241,6 +1248,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackPracticeEvent("polish_generated", currentQuestionIndex, {
         ai_success: polish.aiSuccess,
         ai_node: "polish",
+        ai_provider: polish.aiProvider,
         ai_source: polish.aiSource,
         fallback_used: polish.fallbackUsed,
         fallback_reason: polish.fallbackReason,
@@ -1265,6 +1273,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackedRef.current.retryAnswerSubmitted.add(currentQuestionIndex);
       trackPracticeEvent("retry_feedback_generated", currentQuestionIndex, {
         ai_node: "retry_feedback",
+        ai_provider: retryFeedback.aiProvider,
         ai_source: retryFeedback.aiSource,
         fallback_reason: retryFeedback.fallbackReason,
         feedback_generation_mode: retryFeedback.generationMode,
@@ -1274,6 +1283,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       trackPracticeEvent("retry_answer_submitted", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         retry_ai_node: "retry_feedback",
+        retry_ai_provider: retryFeedback.aiProvider,
         retry_ai_source: retryFeedback.aiSource,
         retry_fallback_reason: retryFeedback.fallbackReason,
         retry_llm_latency_ms: retryFeedback.llmLatencyMs ?? null,

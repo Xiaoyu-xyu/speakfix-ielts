@@ -71,6 +71,7 @@ export type ApiPolishResponse = {
   extensionSentence: string;
   hasMeaningfulPolish: boolean;
   source: "llm" | "mock_fallback";
+  aiProvider: "openai" | "siliconflow";
   fallbackReason: string | null;
   llmLatencyMs: number | null;
 };
@@ -100,6 +101,7 @@ export type ApiRetryFeedbackResponse = {
   feedbackText: string;
   adoptedExpressions: string[];
   source: "llm" | "mock_fallback";
+  aiProvider: "openai" | "siliconflow";
   fallbackReason: string | null;
   llmLatencyMs: number | null;
 };
@@ -111,6 +113,7 @@ export type AiServiceResult<T> = {
   fallback_used: boolean;
   failure_reason?: string;
   ai_source: "llm" | "mock_fallback";
+  ai_provider?: "openai" | "siliconflow";
   fallback_reason?: string;
   llm_latency_ms?: number | null;
 };
@@ -214,9 +217,10 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
     generation_mode: "mock",
     ai_success: false,
     fallback_used: false,
-    ai_source: "mock_fallback",
-    fallback_reason: "mock_rule",
-    llm_latency_ms: null,
+      ai_source: "mock_fallback",
+      ai_provider: "openai",
+      fallback_reason: "mock_rule",
+      llm_latency_ms: null,
   };
 }
 
@@ -724,6 +728,7 @@ export async function generatePolishSuggestion(
       fallback_used: result.source === "mock_fallback",
       failure_reason: result.fallbackReason ?? undefined,
       ai_source: result.source,
+      ai_provider: result.aiProvider,
       fallback_reason: result.fallbackReason ?? undefined,
       llm_latency_ms: result.llmLatencyMs,
     };
@@ -736,6 +741,7 @@ export async function generatePolishSuggestion(
       failure_reason:
         error instanceof Error ? error.message : "ai_generation_failed",
       ai_source: "mock_fallback",
+      ai_provider: "openai",
       fallback_reason:
         error instanceof Error ? error.message : "ai_generation_failed",
       llm_latency_ms: null,
@@ -774,6 +780,7 @@ export async function generateRetryFeedback(
       fallback_used: result.source === "mock_fallback",
       failure_reason: result.fallbackReason ?? undefined,
       ai_source: result.source,
+      ai_provider: result.aiProvider,
       fallback_reason: result.fallbackReason ?? undefined,
       llm_latency_ms: result.llmLatencyMs,
     };
@@ -786,6 +793,7 @@ export async function generateRetryFeedback(
       failure_reason:
         error instanceof Error ? error.message : "retry_feedback_failed",
       ai_source: "mock_fallback",
+      ai_provider: "openai",
       fallback_reason:
         error instanceof Error ? error.message : "retry_feedback_failed",
       llm_latency_ms: null,

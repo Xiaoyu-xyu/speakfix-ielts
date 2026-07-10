@@ -18,13 +18,53 @@ export type FallbackReason =
   | "schema_invalid"
   | "empty_response";
 
-type OpenAiResult =
-  | { ok: true; data: unknown; latencyMs: number }
-  | { ok: false; reason: FallbackReason; latencyMs: number | null };
+type AiProvider = "openai" | "siliconflow";
 
-const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
-const OPENAI_TIMEOUT_MS = 12_000;
+type LlmResult =
+  | { ok: true; data: unknown; latencyMs: number; provider: AiProvider }
+  | {
+      ok: false;
+      reason: FallbackReason;
+      latencyMs: number | null;
+      provider: AiProvider;
+    };
+
+const DEFAULT_OPENAI_CHAT_COMPLETIONS_URL =
+  "https://api.openai.com/v1/chat/completions";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const DEFAULT_SILICONFLOW_CHAT_COMPLETIONS_URL =
+  "https://api.siliconflow.cn/v1/chat/completions";
+const LLM_TIMEOUT_MS = 12_000;
+
+function getAiProvider(): AiProvider {
+  return process.env.AI_PROVIDER?.toLowerCase() === "siliconflow"
+    ? "siliconflow"
+    : "openai";
+}
+
+function getProviderConfig() {
+  const provider = getAiProvider();
+
+  if (provider === "siliconflow") {
+    return {
+      apiKey: process.env.SILICONFLOW_API_KEY,
+      baseUrl:
+        process.env.SILICONFLOW_BASE_URL ??
+        DEFAULT_SILICONFLOW_CHAT_COMPLETIONS_URL,
+      model: process.env.SILICONFLOW_MODEL ?? "",
+      provider,
+      supportsResponseFormat: false,
+    };
+  }
+
+  return {
+    apiKey: process.env.OPENAI_API_KEY,
+    baseUrl: DEFAULT_OPENAI_CHAT_COMPLETIONS_URL,
+    model: process.env.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL,
+    provider,
+    supportsResponseFormat: true,
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,40 +78,57 @@ function normalizeOptionalString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function callOpenAiJson(systemPrompt: string, userPayload: unknown): Promise<OpenAiResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function callLlmJson(
+  systemPrompt: string,
+  userPayload: unknown,
+): Promise<LlmResult> {
+  const config = getProviderConfig();
 
-  if (!apiKey) {
-    return { ok: false, reason: "missing_api_key", latencyMs: null };
+  if (!config.apiKey) {
+    return {
+      ok: false,
+      reason: "missing_api_key",
+      latencyMs: null,
+      provider: config.provider,
+    };
   }
 
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+  const requestBody: Record<string, unknown> = {
+    model: config.model,
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(userPayload) },
+    ],
+  };
+
+  if (config.supportsResponseFormat) {
+    requestBody.response_format = { type: "json_object" };
+  }
 
   try {
-    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+    const response = await fetch(config.baseUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${config.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: JSON.stringify(userPayload) },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
 
     const latencyMs = Date.now() - startedAt;
 
     if (!response.ok) {
-      return { ok: false, reason: "llm_request_failed", latencyMs };
+      return {
+        ok: false,
+        reason: "llm_request_failed",
+        latencyMs,
+        provider: config.provider,
+      };
     }
 
     const responseJson = (await response.json()) as {
@@ -80,13 +137,28 @@ async function callOpenAiJson(systemPrompt: string, userPayload: unknown): Promi
     const content = responseJson.choices?.[0]?.message?.content?.trim();
 
     if (!content) {
-      return { ok: false, reason: "empty_response", latencyMs };
+      return {
+        ok: false,
+        reason: "empty_response",
+        latencyMs,
+        provider: config.provider,
+      };
     }
 
     try {
-      return { ok: true, data: JSON.parse(content), latencyMs };
+      return {
+        ok: true,
+        data: JSON.parse(content),
+        latencyMs,
+        provider: config.provider,
+      };
     } catch {
-      return { ok: false, reason: "invalid_json", latencyMs };
+      return {
+        ok: false,
+        reason: "invalid_json",
+        latencyMs,
+        provider: config.provider,
+      };
     }
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
@@ -95,7 +167,7 @@ async function callOpenAiJson(systemPrompt: string, userPayload: unknown): Promi
         ? "llm_timeout"
         : "llm_request_failed";
 
-    return { ok: false, reason, latencyMs };
+    return { ok: false, reason, latencyMs, provider: config.provider };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -135,6 +207,7 @@ export function createPolishFallbackResponse(
     extensionSentence: mockResult.expansionSentence,
     hasMeaningfulPolish: mockResult.noPolishNeeded !== true,
     source: "mock_fallback",
+    aiProvider: getAiProvider(),
     fallbackReason,
     llmLatencyMs,
   };
@@ -183,6 +256,7 @@ export function validatePolishApiResponse(value: unknown): ApiPolishResponse | n
     extensionSentence: normalizeOptionalString(value.extensionSentence),
     hasMeaningfulPolish: value.hasMeaningfulPolish,
     source: "llm",
+    aiProvider: getAiProvider(),
     fallbackReason: null,
     llmLatencyMs: null,
   };
@@ -191,7 +265,7 @@ export function validatePolishApiResponse(value: unknown): ApiPolishResponse | n
 export async function generatePolishWithLlm(
   input: PolishInput,
 ): Promise<ApiPolishResponse> {
-  const llmResult = await callOpenAiJson(POLISH_SYSTEM_PROMPT, {
+  const llmResult = await callLlmJson(POLISH_SYSTEM_PROMPT, {
     topicId: input.topic_id,
     questionText: input.question_text,
     userTranscript: input.user_answer,
@@ -210,6 +284,7 @@ export async function generatePolishWithLlm(
 
   return {
     ...validated,
+    aiProvider: llmResult.provider,
     llmLatencyMs: llmResult.latencyMs,
   };
 }
@@ -252,6 +327,7 @@ export function createRetryFeedbackFallbackResponse(
         ? [input.expansion_sentence]
         : [],
     source: "mock_fallback",
+    aiProvider: getAiProvider(),
     fallbackReason,
     llmLatencyMs,
   };
@@ -282,6 +358,7 @@ export function validateRetryFeedbackApiResponse(
       .map((expression) => expression.trim())
       .filter(Boolean),
     source: "llm",
+    aiProvider: getAiProvider(),
     fallbackReason: null,
     llmLatencyMs: null,
   };
@@ -290,7 +367,7 @@ export function validateRetryFeedbackApiResponse(
 export async function generateRetryFeedbackWithLlm(
   input: RetryFeedbackInput,
 ): Promise<ApiRetryFeedbackResponse> {
-  const llmResult = await callOpenAiJson(RETRY_FEEDBACK_SYSTEM_PROMPT, {
+  const llmResult = await callLlmJson(RETRY_FEEDBACK_SYSTEM_PROMPT, {
     questionText: input.question_text,
     firstTranscript: input.first_answer,
     polishedAnswer: input.polished_answer,
@@ -314,6 +391,7 @@ export async function generateRetryFeedbackWithLlm(
 
   return {
     ...validated,
+    aiProvider: llmResult.provider,
     llmLatencyMs: llmResult.latencyMs,
   };
 }
