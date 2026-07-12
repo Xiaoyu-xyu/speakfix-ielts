@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "regression:real-llm:a02-a04": "node tests/regression/run-real-llm-a02-a04.js",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit"

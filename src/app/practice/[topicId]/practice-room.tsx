@@ -114,13 +114,59 @@ type AsrApiResponse = {
   latency: number | null;
 };
 
+type AsrFailureType = "no_valid_speech" | "technical_failure" | null;
+type AsrStatus =
+  | "idle"
+  | "recording"
+  | "transcribing"
+  | "success"
+  | "no_valid_speech"
+  | "technical_failure"
+  | "skipped_for_debug_text";
+type AudioStatus =
+  | "idle"
+  | "recording"
+  | "recorded"
+  | "too_short"
+  | "empty"
+  | "unavailable"
+  | "skipped_for_debug_text";
+
 type AsrResult = {
-  transcript: string;
+  rawTranscript: string;
+  cleanedTranscript: string;
   provider: "siliconflow";
-  source: "asr" | "mock_fallback";
+  source: "asr" | "none";
   fallbackReason?: string;
   latencyMs: number | null;
   audioMimeType?: string;
+  audioStatus: AudioStatus;
+  asrStatus: AsrStatus;
+  hasValidSpeech: boolean;
+  failureType: AsrFailureType;
+};
+
+type TranscriptSubmissionMeta = {
+  recordedSeconds: number;
+  fallbackReason: string | null;
+  fallbackMode?: "mock_fallback";
+  inputMode: "asr" | "web_speech" | "mock" | "debug_text";
+  isMockTranscription: boolean;
+  recognitionStatus: string;
+  asrProvider: "siliconflow" | "skipped";
+  asrSource: "asr" | "none" | "skipped_for_debug_text";
+  asrLatencyMs: number | null;
+  audioMimeType?: string;
+  transcriptSource:
+    | "siliconflow_asr"
+    | "none"
+    | "debug_text";
+  audioStatus: AudioStatus;
+  asrStatus: AsrStatus;
+  rawTranscript: string;
+  cleanedTranscript: string;
+  hasValidSpeech: boolean;
+  failureType: AsrFailureType;
 };
 
 type IconProps = {
@@ -362,14 +408,14 @@ function getMockFallbackNotice(fallbackReason?: string) {
   }
 
   if (fallbackReason === "speech_recognition_unsupported") {
-    return "当前浏览器语音识别不可用，已使用模拟转写继续练习。";
+    return "转写暂时失败，请再试一次~";
   }
 
   if (fallbackReason === "recognition_empty") {
-    return "未识别到有效语音，已使用模拟转写继续练习。";
+    return "没有听清，再说一次吧~";
   }
 
-  return "已使用模拟转写继续练习。";
+  return "转写暂时失败，请再试一次~";
 }
 
 function toPolishViewModel(result: AiServiceResult<PolishResult>) {
@@ -555,7 +601,11 @@ function DebugPanel({
   const debugValue = (payload: Record<string, unknown>, key: string) => {
     const value = payload[key];
 
-    if (value === undefined || value === null || value === "") {
+    if (value === null) {
+      return "null";
+    }
+
+    if (value === undefined || value === "") {
       return "missing";
     }
 
@@ -614,6 +664,20 @@ function DebugPanel({
           </p>
           <p>asr_provider: {debugValue(speechPayload, "asr_provider")}</p>
           <p>asr_source: {debugValue(speechPayload, "asr_source")}</p>
+          <p>audio_status: {debugValue(speechPayload, "audio_status")}</p>
+          <p>asr_status: {debugValue(speechPayload, "asr_status")}</p>
+          <p>
+            raw_transcript: {debugValue(speechPayload, "raw_transcript")}
+          </p>
+          <p>
+            cleaned_transcript:{" "}
+            {debugValue(speechPayload, "cleaned_transcript")}
+          </p>
+          <p>
+            has_valid_speech:{" "}
+            {debugValue(speechPayload, "has_valid_speech")}
+          </p>
+          <p>failure_type: {debugValue(speechPayload, "failure_type")}</p>
           <p>asr_latency_ms: {debugValue(speechPayload, "asr_latency_ms")}</p>
           <p>
             audio_mime_type: {debugValue(speechPayload, "audio_mime_type")}
@@ -667,6 +731,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const [notice, setNotice] = useState("");
   const [showCompletion, setShowCompletion] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
+  const [debugFirstText, setDebugFirstText] = useState("");
+  const [debugRetryText, setDebugRetryText] = useState("");
+  const [debugTextError, setDebugTextError] = useState("");
+  const [debugTextSubmitting, setDebugTextSubmitting] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [debugEvents, setDebugEvents] = useState<StoredEvent[]>([]);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -703,8 +771,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   >({});
   const [preAnswerLoadingIds, setPreAnswerLoadingIds] = useState<string[]>([]);
 
+  const isRetryDebugTextMode = isDebugMode && status === "retryRecording";
   const isRecording =
-    status === "recording" || status === "retryRecording";
+    status === "recording" ||
+    (status === "retryRecording" && !isRetryDebugTextMode);
   const currentQuestion = topic.questions[currentQuestionIndex];
 
   function getSpeechRecognitionConstructor() {
@@ -888,7 +958,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     }
   }
 
-  function getAudioFileExtension(mimeType: string) {
+function getAudioFileExtension(mimeType: string) {
     if (mimeType.includes("mp4")) {
       return "mp4";
     }
@@ -904,25 +974,176 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     return "webm";
   }
 
+  function normalizeAsrTranscript(rawTranscript: string) {
+    let text = rawTranscript
+      .normalize("NFKC")
+      .replace(/\p{Extended_Pictographic}/gu, "")
+      .replace(/\[[^\]]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^\]]*\]/gi, " ")
+      .replace(/\([^)]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^)]*\)/gi, " ")
+      .replace(/<[^>]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^>]*>/gi, " ")
+      .replace(/[♪♫♬♩★☆◆◇■□●○]/g, " ")
+      .replace(/[^\p{L}\p{N}\s'.,!?-]/gu, " ")
+      .replace(/([.!?]){2,}/g, "$1")
+      .replace(/\s+([.,!?])/g, "$1")
+      .replace(/([.,!?])(?=\S)/g, "$1 ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    text = applySelfCorrectionCleanup(text);
+
+    if (text && !/[.!?]$/.test(text)) {
+      text = `${text}.`;
+    }
+
+    return text;
+  }
+
+  function applySelfCorrectionCleanup(text: string) {
+    const correctionPatterns = [
+      /\b(?:sorry|no|actually)\s*,?\s*(?:i mean|what i mean is|i meant)\s+/gi,
+      /\b(?:sorry|no|actually)\s*,?\s+/gi,
+      /\b(?:i mean|what i mean is|i meant)\s+/gi,
+    ];
+    let cleanedText = text;
+
+    correctionPatterns.forEach((pattern) => {
+      const matches = Array.from(cleanedText.matchAll(pattern));
+      const lastMatch = matches.at(-1);
+
+      if (!lastMatch || lastMatch.index === undefined) {
+        return;
+      }
+
+      const prefix = cleanedText.slice(0, lastMatch.index).trim();
+      const correction = cleanedText
+        .slice(lastMatch.index + lastMatch[0].length)
+        .trim();
+      const subjectPrefix = inferCorrectionPrefix(prefix);
+
+      cleanedText = `${subjectPrefix}${correction}`.trim();
+    });
+
+    return cleanedText
+      .replace(/\s+/g, " ")
+      .replace(/\s+([.,!?])/g, "$1")
+      .trim();
+  }
+
+  function inferCorrectionPrefix(prefix: string) {
+    const normalizedPrefix = prefix.trim();
+
+    if (/\bi live in\s+[^,.!?]+[,.!?]?$/i.test(normalizedPrefix)) {
+      return "I live in ";
+    }
+
+    if (/\bi am from\s+[^,.!?]+[,.!?]?$/i.test(normalizedPrefix)) {
+      return "I am from ";
+    }
+
+    if (/\bi'?m from\s+[^,.!?]+[,.!?]?$/i.test(normalizedPrefix)) {
+      return "I'm from ";
+    }
+
+    if (/\bi work (?:as|in|at)\s+[^,.!?]+[,.!?]?$/i.test(normalizedPrefix)) {
+      const match = normalizedPrefix.match(/\b(i work (?:as|in|at)\s+)/i);
+      return match?.[1] ?? "";
+    }
+
+    if (/\bi study\s+[^,.!?]+[,.!?]?$/i.test(normalizedPrefix)) {
+      return "I study ";
+    }
+
+    return "";
+  }
+
+  function hasValidLanguageText(cleanedTranscript: string) {
+    const normalizedText = cleanedTranscript
+      .toLowerCase()
+      .replace(/[^a-z'\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalizedText) {
+      return false;
+    }
+
+    const words = normalizedText.split(" ").filter(Boolean);
+    const fillerWords = new Set([
+      "um",
+      "uh",
+      "er",
+      "ah",
+      "hmm",
+      "mmm",
+      "la",
+      "ha",
+      "oh",
+      "wow",
+    ]);
+    const meaningfulWords = words.filter((word) => !fillerWords.has(word));
+
+    if (meaningfulWords.length === 0) {
+      return false;
+    }
+
+    return (
+      meaningfulWords.length >= 2 ||
+      /^(yes|no|yeah|nope|sometimes|usually|maybe|sure)$/.test(
+        meaningfulWords.join(" "),
+      )
+    );
+  }
+
+  function getAsrFailureType(fallbackReason?: string): AsrFailureType {
+    if (
+      fallbackReason === "empty_audio" ||
+      fallbackReason === "recording_too_short" ||
+      fallbackReason === "empty_transcript" ||
+      fallbackReason === "invalid_language_text"
+    ) {
+      return "no_valid_speech";
+    }
+
+    return "technical_failure";
+  }
+
   async function transcribeWithAsr(
     audioBlob: Blob | null,
     kind: "first" | "retry",
     recordedSeconds: number,
   ): Promise<AsrResult> {
-    const fallbackResult = (
+    const failureResult = (
       fallbackReason: string,
       latencyMs: number | null = null,
+      audioStatus: AudioStatus = "recorded",
     ): AsrResult => ({
-      transcript: "",
+      rawTranscript: "",
+      cleanedTranscript: "",
       provider: "siliconflow",
-      source: "mock_fallback",
+      source: "none",
       fallbackReason,
       latencyMs,
       audioMimeType: audioBlob?.type || audioMimeTypeRef.current || "",
+      audioStatus,
+      asrStatus:
+        getAsrFailureType(fallbackReason) === "no_valid_speech"
+          ? "no_valid_speech"
+          : "technical_failure",
+      hasValidSpeech: false,
+      failureType: getAsrFailureType(fallbackReason),
     });
 
+    if (recordedSeconds > 0 && recordedSeconds < 1) {
+      return failureResult("recording_too_short", null, "too_short");
+    }
+
     if (!audioBlob || audioBlob.size === 0) {
-      return fallbackResult(mediaRecorderErrorRef.current || "empty_audio");
+      const fallbackReason = mediaRecorderErrorRef.current || "empty_audio";
+      return failureResult(
+        fallbackReason,
+        null,
+        fallbackReason === "empty_audio" ? "empty" : "unavailable",
+      );
     }
 
     const formData = new FormData();
@@ -946,30 +1167,41 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       });
 
       if (!response.ok) {
-        return fallbackResult("asr_request_failed");
+        return failureResult("asr_request_failed");
       }
 
       const result = (await response.json()) as AsrApiResponse;
-      const transcriptText = result.transcript?.trim() ?? "";
-      const source = result.source === "asr" ? "asr" : "mock_fallback";
+      const rawTranscript = result.transcript?.trim() ?? "";
 
-      if (source === "asr" && transcriptText) {
+      if (result.source === "asr" && rawTranscript) {
+        const cleanedTranscript = normalizeAsrTranscript(rawTranscript);
+        const hasValidSpeech = hasValidLanguageText(cleanedTranscript);
+
+        if (!hasValidSpeech) {
+          return failureResult("invalid_language_text", result.latency);
+        }
+
         return {
-          transcript: transcriptText,
+          rawTranscript,
+          cleanedTranscript,
           provider: "siliconflow",
           source: "asr",
           fallbackReason: undefined,
           latencyMs: result.latency,
           audioMimeType: mimeType,
+          audioStatus: "recorded",
+          asrStatus: "success",
+          hasValidSpeech: true,
+          failureType: null,
         };
       }
 
-      return fallbackResult(
+      return failureResult(
         result.fallbackReason ?? "empty_transcript",
         result.latency,
       );
     } catch {
-      return fallbackResult("asr_request_failed");
+      return failureResult("asr_request_failed");
     }
   }
 
@@ -984,13 +1216,13 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_available: true,
         fallback_reason: "speech_recognition_unsupported",
-        input_mode: "mock",
-        is_mock_transcription: true,
+        input_mode: "asr",
+        is_mock_transcription: false,
         recognition_status: "unsupported",
         reason: "speech_recognition_unsupported",
-        transcript_source: "mock_fallback",
+        transcript_source: "none",
       });
-      setNotice("当前浏览器语音识别不可用，已使用模拟转写继续练习。");
+      setNotice("");
       return;
     }
 
@@ -1031,11 +1263,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
           ai_node: "A05_ASR_TRANSCRIPTION",
           fallback_available: true,
           fallback_reason: fallbackReason,
-          input_mode: "mock",
-          is_mock_transcription: true,
+          input_mode: "asr",
+          is_mock_transcription: false,
           recognition_status: "failed",
           reason: error,
-          transcript_source: "mock_fallback",
+          transcript_source: "none",
         });
 
         if (
@@ -1043,7 +1275,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
           error === "service-not-allowed" ||
           error === "audio-capture"
         ) {
-          setNotice("未识别到有效语音，已使用模拟转写继续练习。");
+          setNotice("");
         }
       };
       recognition.onend = () => {
@@ -1058,13 +1290,13 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_available: true,
         fallback_reason: "recognition_error",
-        input_mode: "mock",
-        is_mock_transcription: true,
+        input_mode: "asr",
+        is_mock_transcription: false,
         recognition_status: "failed",
         reason: "speech_recognition_start_failed",
-        transcript_source: "mock_fallback",
+        transcript_source: "none",
       });
-      setNotice("当前浏览器语音识别不可用，已使用模拟转写继续练习。");
+      setNotice("");
     }
   }
   function refreshDebugEvents() {
@@ -1417,80 +1649,38 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     setStatus(status === "retryRecording" ? "answered" : "readyToAnswer");
   }
 
-  async function submitRecording() {
-    if (!isRecording || submitLockedRef.current) {
-      return;
-    }
-
-    submitLockedRef.current = true;
-    const kind = status === "retryRecording" ? "retry" : "first";
-    const recordedSeconds = recordingSeconds;
-    stopRecognition();
-    setIsTranscribing(true);
-    setNotice("正在识别你的回答...");
-    const audioBlob = await stopMediaRecorderForBlob();
-    const asrResult = await transcribeWithAsr(audioBlob, kind, recordedSeconds);
-    setIsTranscribing(false);
+  async function submitAnswerText(
+    kind: "first" | "retry",
+    answerText: string,
+    submissionMeta: TranscriptSubmissionMeta,
+  ) {
     const firstAnswer = answers.find(
       (answer) =>
         answer.questionIndex === currentQuestionIndex && answer.kind === "first",
     );
 
-    const asrTranscript =
-      asrResult.source === "asr" ? asrResult.transcript.trim() : "";
-    const realTranscript = transcript.trim();
-    const interimFallback = interimTranscript.trim();
-    const mockTranscript = getMockAnswer(
-      currentQuestion.id,
-      kind,
-      firstAnswer?.polish?.expansionSentence,
-    );
-    const hasRealTranscript = Boolean(
-      asrTranscript || realTranscript || interimFallback,
-    );
-    const answerText =
-      asrTranscript || realTranscript || interimFallback || mockTranscript;
-    const transcriptSource = asrTranscript
-      ? "siliconflow_asr"
-      : realTranscript
-        ? "web_speech_final"
-        : interimFallback
-          ? "web_speech_interim_fallback"
-          : "mock_fallback";
-    const inputMode = asrTranscript
-      ? "asr"
-      : realTranscript || interimFallback
-        ? "web_speech"
-        : "mock";
-    const isMockTranscription = !hasRealTranscript;
-    const fallbackReason =
-      asrTranscript || asrResult.source === "asr"
-        ? undefined
-        : asrResult.fallbackReason ??
-          (isMockTranscription
-            ? normalizeSpeechFallbackReason(recognitionSupported, recognitionError)
-            : undefined);
-    const recognitionStatus = asrTranscript
-      ? "success"
-      : realTranscript || interimFallback
-        ? "web_speech_fallback"
-        : fallbackReason ?? "mock_fallback";
-
     if (!answerText.trim()) {
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
-        fallback_reason: fallbackReason ?? "empty_transcription",
-        fallback_mode: "mock_fallback",
-        input_mode: inputMode,
-        is_mock_transcription: isMockTranscription,
+        fallback_reason:
+          submissionMeta.fallbackReason ?? "empty_transcription",
+        fallback_mode: submissionMeta.fallbackMode ?? "mock_fallback",
+        input_mode: submissionMeta.inputMode,
+        is_mock_transcription: submissionMeta.isMockTranscription,
         reason: recognitionError || "empty_transcription",
-        recognition_status: recognitionStatus,
-        asr_provider: asrResult.provider,
-        asr_source: asrResult.source,
-        asr_latency_ms: asrResult.latencyMs,
-        audio_mime_type: asrResult.audioMimeType,
-        audio_duration_seconds: recordedSeconds,
-        transcript_source: transcriptSource,
+        recognition_status: submissionMeta.recognitionStatus,
+        asr_provider: submissionMeta.asrProvider,
+        asr_source: submissionMeta.asrSource,
+        asr_latency_ms: submissionMeta.asrLatencyMs,
+        audio_status: submissionMeta.audioStatus,
+        asr_status: submissionMeta.asrStatus,
+        raw_transcript: submissionMeta.rawTranscript,
+        cleaned_transcript: submissionMeta.cleanedTranscript,
+        has_valid_speech: submissionMeta.hasValidSpeech,
+        failure_type: submissionMeta.failureType,
+        audio_mime_type: submissionMeta.audioMimeType,
+        audio_duration_seconds: submissionMeta.recordedSeconds,
+        transcript_source: submissionMeta.transcriptSource,
       });
       setNotice("\u6ca1\u6709\u8bc6\u522b\u5230\u6709\u6548\u56de\u7b54\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21\u3002");
       submitLockedRef.current = false;
@@ -1500,7 +1690,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
 
     const answerLength = wordCount(answerText);
     const answerId = `${currentQuestion.id}-${kind}-${Date.now()}`;
-    const answerDuration = Math.max(recordedSeconds, 4);
+    const answerDuration = Math.max(submissionMeta.recordedSeconds, 4);
     setAnswers((prevAnswers) => [
       ...prevAnswers,
       {
@@ -1629,18 +1819,24 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         ai_node: "A05_ASR_TRANSCRIPTION",
         answer_text: answerText,
         answer_length: answerLength,
-        fallback_reason: fallbackReason,
-        fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
-        input_mode: inputMode,
-        is_mock_transcription: isMockTranscription,
-        recognition_status: recognitionStatus,
-        asr_provider: asrResult.provider,
-        asr_source: asrResult.source,
-        asr_latency_ms: asrResult.latencyMs,
-        audio_mime_type: asrResult.audioMimeType,
-        audio_duration_seconds: recordedSeconds,
-        recording_duration_seconds: recordedSeconds,
-        transcript_source: transcriptSource,
+        fallback_reason: submissionMeta.fallbackReason,
+        fallback_mode: submissionMeta.fallbackMode,
+        input_mode: submissionMeta.inputMode,
+        is_mock_transcription: submissionMeta.isMockTranscription,
+        recognition_status: submissionMeta.recognitionStatus,
+        asr_provider: submissionMeta.asrProvider,
+        asr_source: submissionMeta.asrSource,
+        asr_latency_ms: submissionMeta.asrLatencyMs,
+        audio_status: submissionMeta.audioStatus,
+        asr_status: submissionMeta.asrStatus,
+        raw_transcript: submissionMeta.rawTranscript,
+        cleaned_transcript: submissionMeta.cleanedTranscript,
+        has_valid_speech: submissionMeta.hasValidSpeech,
+        failure_type: submissionMeta.failureType,
+        audio_mime_type: submissionMeta.audioMimeType,
+        audio_duration_seconds: submissionMeta.recordedSeconds,
+        recording_duration_seconds: submissionMeta.recordedSeconds,
+        transcript_source: submissionMeta.transcriptSource,
       });
     }
 
@@ -1693,28 +1889,163 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
         retry_ai_source: retryFeedback.aiSource,
         retry_fallback_reason: retryFeedback.fallbackReason,
         retry_llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
-        fallback_reason: fallbackReason,
-        fallback_mode: isMockTranscription ? "mock_fallback" : undefined,
+        fallback_reason: submissionMeta.fallbackReason,
+        fallback_mode: submissionMeta.fallbackMode,
         feedback_generation_mode: retryFeedback.generationMode,
-        input_mode: inputMode,
-        is_mock_transcription: isMockTranscription,
-        recognition_status: recognitionStatus,
+        input_mode: submissionMeta.inputMode,
+        is_mock_transcription: submissionMeta.isMockTranscription,
+        recognition_status: submissionMeta.recognitionStatus,
+        asr_provider: submissionMeta.asrProvider,
+        asr_source: submissionMeta.asrSource,
+        asr_latency_ms: submissionMeta.asrLatencyMs,
+        audio_status: submissionMeta.audioStatus,
+        asr_status: submissionMeta.asrStatus,
+        raw_transcript: submissionMeta.rawTranscript,
+        cleaned_transcript: submissionMeta.cleanedTranscript,
+        has_valid_speech: submissionMeta.hasValidSpeech,
+        failure_type: submissionMeta.failureType,
+        audio_mime_type: submissionMeta.audioMimeType,
+        audio_duration_seconds: submissionMeta.recordedSeconds,
+        recording_duration_seconds: submissionMeta.recordedSeconds,
+        transcript_source: submissionMeta.transcriptSource,
+        retry_answer_text: answerText,
+        retry_feedback_type: retryFeedback.type,
+      });
+    }
+
+    if (!submissionMeta.isMockTranscription) {
+      setNotice("");
+    } else {
+      setNotice(getMockFallbackNotice(submissionMeta.fallbackReason ?? undefined));
+    }
+    submitLockedRef.current = false;
+  }
+
+  async function submitRecording() {
+    if (!isRecording || submitLockedRef.current) {
+      return;
+    }
+
+    submitLockedRef.current = true;
+    const kind = status === "retryRecording" ? "retry" : "first";
+    const recordedSeconds = recordingSeconds;
+    stopRecognition();
+    setIsTranscribing(true);
+    setNotice("正在识别你的回答...");
+    const audioBlob = await stopMediaRecorderForBlob();
+    const asrResult = await transcribeWithAsr(audioBlob, kind, recordedSeconds);
+    setIsTranscribing(false);
+
+    if (!asrResult.hasValidSpeech) {
+      const isNoValidSpeech = asrResult.failureType === "no_valid_speech";
+
+      trackPracticeEvent("transcription_failed", currentQuestionIndex, {
+        ai_node: "A05_ASR_TRANSCRIPTION",
+        audio_status: asrResult.audioStatus,
+        asr_status: asrResult.asrStatus,
+        raw_transcript: asrResult.rawTranscript,
+        cleaned_transcript: asrResult.cleanedTranscript,
+        has_valid_speech: false,
+        failure_type: asrResult.failureType,
+        fallback_reason: asrResult.fallbackReason ?? null,
+        fallback_mode: undefined,
+        input_mode: "asr",
+        is_mock_transcription: false,
+        recognition_status: asrResult.asrStatus,
         asr_provider: asrResult.provider,
         asr_source: asrResult.source,
         asr_latency_ms: asrResult.latencyMs,
         audio_mime_type: asrResult.audioMimeType,
         audio_duration_seconds: recordedSeconds,
         recording_duration_seconds: recordedSeconds,
-        transcript_source: transcriptSource,
-        retry_answer_text: answerText,
-        retry_feedback_type: retryFeedback.type,
+        transcript_source: "none",
       });
+      resetSpeechState();
+      setNotice(
+        isNoValidSpeech
+          ? "没有听清，再说一次吧~"
+          : "转写暂时失败，请再试一次~",
+      );
+      submitLockedRef.current = false;
+      setStatus(kind === "retry" ? "answered" : "readyToAnswer");
+      return;
     }
 
-    if (!isMockTranscription) {
-      setNotice("");
-    } else {
-      setNotice(getMockFallbackNotice(fallbackReason));
+    await submitAnswerText(kind, asrResult.cleanedTranscript, {
+      recordedSeconds,
+      fallbackReason: null,
+      fallbackMode: undefined,
+      inputMode: "asr",
+      isMockTranscription: false,
+      recognitionStatus: "success",
+      asrProvider: asrResult.provider,
+      asrSource: asrResult.source,
+      asrLatencyMs: asrResult.latencyMs,
+      audioMimeType: asrResult.audioMimeType,
+      transcriptSource: "siliconflow_asr",
+      audioStatus: asrResult.audioStatus,
+      asrStatus: asrResult.asrStatus,
+      rawTranscript: asrResult.rawTranscript,
+      cleanedTranscript: asrResult.cleanedTranscript,
+      hasValidSpeech: asrResult.hasValidSpeech,
+      failureType: null,
+    });
+  }
+
+  async function submitDebugText(kind: "first" | "retry") {
+    if (!isDebugMode || submitLockedRef.current || debugTextSubmitting) {
+      return;
+    }
+
+    if (kind === "first" && status !== "readyToAnswer") {
+      return;
+    }
+
+    if (kind === "retry" && status !== "retryRecording") {
+      return;
+    }
+
+    const rawText = kind === "first" ? debugFirstText : debugRetryText;
+    const answerText = rawText.trim();
+
+    if (!answerText) {
+      setDebugTextError("请输入测试文本后再提交。");
+      return;
+    }
+
+    setDebugTextError("");
+    setDebugTextSubmitting(true);
+    submitLockedRef.current = true;
+
+    try {
+      await submitAnswerText(kind, answerText, {
+        recordedSeconds: 0,
+        fallbackReason: null,
+        fallbackMode: undefined,
+        inputMode: "debug_text",
+        isMockTranscription: false,
+        recognitionStatus: "skipped_for_debug_text",
+        asrProvider: "skipped",
+        asrSource: "skipped_for_debug_text",
+        asrLatencyMs: null,
+        audioMimeType: undefined,
+        transcriptSource: "debug_text",
+        audioStatus: "skipped_for_debug_text",
+        asrStatus: "skipped_for_debug_text",
+        rawTranscript: answerText,
+        cleanedTranscript: answerText,
+        hasValidSpeech: true,
+        failureType: null,
+      });
+
+      if (kind === "first") {
+        setDebugFirstText("");
+      } else {
+        setDebugRetryText("");
+      }
+    } finally {
+      submitLockedRef.current = false;
+      setDebugTextSubmitting(false);
     }
   }
 
@@ -1759,6 +2090,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
       setNotice("");
       setIsTranscribing(false);
       submitLockedRef.current = false;
+      if (isDebugMode) {
+        setDebugTextError("");
+        setStatus("retryRecording");
+        return;
+      }
       // A05_ASR_TRANSCRIPTION: MediaRecorder ASR first, Web Speech and Mock fallback.
       void startMediaRecording();
       startSpeechRecognition();
@@ -1805,6 +2141,10 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     discardMediaRecording();
     setIsTranscribing(false);
     setNotice("");
+    setDebugFirstText("");
+    setDebugRetryText("");
+    setDebugTextError("");
+    setDebugTextSubmitting(false);
     submitLockedRef.current = false;
     setTtsFallbackQuestionIds([]);
     setPreAnswerByQuestionId({});
@@ -1980,7 +2320,7 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
                     <p>
                       <span className="font-bold text-ink">润色：</span>
                       <span className="text-bamboo-800">
-                        这句话已经清楚自然，可以直接复说。
+                        说得很自然，继续加油！
                       </span>
                     </p>
                   ) : (
@@ -2021,7 +2361,22 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     !currentAssistGenerating &&
     !isRecording &&
     status !== "completed" &&
+    status !== "retryRecording" &&
     currentQuestionIndex === answers[answers.length - 1]?.questionIndex;
+  const shouldShowDebugFirstInput = isDebugMode && status === "readyToAnswer";
+  const shouldShowDebugRetryInput =
+    isDebugMode && status === "retryRecording";
+  const shouldShowDebugTextInput =
+    shouldShowDebugFirstInput || shouldShowDebugRetryInput;
+  const debugTextKind = shouldShowDebugRetryInput ? "retry" : "first";
+  const debugTextValue =
+    debugTextKind === "retry" ? debugRetryText : debugFirstText;
+  const debugTextPlaceholder =
+    debugTextKind === "retry"
+      ? "输入重说测试文本"
+      : "输入首次回答测试文本";
+  const debugTextButtonLabel =
+    debugTextKind === "retry" ? "提交重说测试文本" : "提交测试文本";
 
   return (
     <main className="relative mx-auto flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden">
@@ -2162,6 +2517,42 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
               <WaveIcon className="h-5 w-8" />
               点击说话
             </button>
+          )}
+          {shouldShowDebugTextInput && (
+            <div className="mt-3 rounded-2xl border border-dashed border-amber-300 bg-amber-50 px-3 py-3">
+              <p className="mb-2 text-xs font-bold text-amber-700">
+                仅 Debug 测试可见
+              </p>
+              <textarea
+                value={debugTextValue}
+                onChange={(event) => {
+                  setDebugTextError("");
+                  if (debugTextKind === "retry") {
+                    setDebugRetryText(event.target.value);
+                  } else {
+                    setDebugFirstText(event.target.value);
+                  }
+                }}
+                placeholder={debugTextPlaceholder}
+                rows={3}
+                className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm leading-5 text-ink outline-none placeholder:text-slate-400 focus:border-amber-400"
+              />
+              {debugTextError && (
+                <p className="mt-1 text-xs font-semibold text-red-600">
+                  {debugTextError}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  void submitDebugText(debugTextKind);
+                }}
+                disabled={debugTextSubmitting}
+                className="mt-2 min-h-10 w-full rounded-xl bg-amber-500 px-3 text-sm font-bold text-white shadow-soft disabled:bg-slate-300"
+              >
+                {debugTextSubmitting ? "提交中..." : debugTextButtonLabel}
+              </button>
+            </div>
           )}
         </div>
       </footer>

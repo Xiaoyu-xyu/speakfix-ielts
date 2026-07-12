@@ -1,0 +1,759 @@
+{
+  "project": "SpeakFix IELTS｜AI雅思口语表达陪练MVP",
+  "purpose": "A02-A04优化后自动回归测试基线",
+  "sourceOfTruth": "A02-A05测试case记录.docx",
+  "caseCount": 17,
+  "notes": [
+    "不得修改题目、输入或Case ID。",
+    "不得根据测试Case写死业务判断。",
+    "回归时记录最新实际输出、是否修复原问题、基础通过/不通过和仍存在的问题。",
+    "本文件不包含A05语音Case。"
+  ],
+  "cases": [
+    {
+      "caseId": "A02-001",
+      "node": "A02",
+      "question": "How old are you?",
+      "questionType": "事实类题型代表",
+      "input": {
+        "action": "点击“思路”查看答前辅助。"
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "directionZh 未输出清晰回答顺序；keywords 未固定为3个可直接使用或替换的回答词；sentenceStarters 未按回答结构生成2—3个功能不同、自然口语化且不重复的分步支架。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "keywords",
+          "arrayLength": 3
+        },
+        {
+          "path": "sentenceStarters",
+          "minArrayLength": 2
+        },
+        {
+          "path": "keywords",
+          "notContains": "twenty"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A02-002",
+      "node": "A02",
+      "question": "Where do you live?",
+      "questionType": "地点类题型代表",
+      "input": {
+        "action": "点击“思路”查看答前辅助。"
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "方向乱码、关键词不可直接稳定使用、支架结构重复且缺少明确表达步骤；并存在替用户预设学校、工作地点等未知信息的风险。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "keywords",
+          "arrayLength": 3
+        },
+        {
+          "path": "sentenceStarters",
+          "minArrayLength": 2
+        },
+        {
+          "path": "keywords",
+          "notContains": "school"
+        },
+        {
+          "path": "keywords",
+          "notContains": "work"
+        },
+        {
+          "path": "sentenceStarters",
+          "notContains": "school"
+        },
+        {
+          "path": "sentenceStarters",
+          "notContains": "work"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "no_unconfirmed_facts",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A02-003",
+      "node": "A02",
+      "question": "Do you prefer to wear comfortable and casual clothes or formal clothes?",
+      "questionType": "偏好比较类题型代表",
+      "input": {
+        "action": "点击“思路”查看答前辅助。"
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "支架缺少实际教学价值；未形成“明确选择＋口语化理由＋可选场景补充”的分步支架规则，只生成基础句型开头。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "keywords",
+          "arrayLength": 3
+        },
+        {
+          "path": "sentenceStarters",
+          "minArrayLength": 2
+        },
+        {
+          "path": "keywords",
+          "notContains": "preference"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A02-004",
+      "node": "A02",
+      "question": "Do you think headphones are useful?",
+      "questionType": "观点判断类题型代表",
+      "input": {
+        "action": "点击“思路”查看答前辅助。"
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "A02 未稳定执行“题型识别—回答结构拆分—3个可用关键词—2至3个功能不同且自然口语化支架”的统一生成规则。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "keywords",
+          "arrayLength": 3
+        },
+        {
+          "path": "sentenceStarters",
+          "minArrayLength": 2
+        },
+        {
+          "path": "keywords",
+          "notContains": "opinion"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A03-001",
+      "node": "A03",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "answer": "I usually wear comfortable and casual clothes because they are easy to move around in."
+      },
+      "baselineResult": "通过",
+      "originalIssue": "核心判断正确，但反馈文案机械；无需润色场景应使用简短的“肯定＋鼓励”文案。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": false
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "comfortable"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "casual"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "clothes"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "T-shirts"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "jeans"
+        }
+      ],
+      "manualReview": [
+        "meaning_preserved",
+        "natural_oral_expression",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A03-002",
+      "node": "A03",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "answer": "I like comfortable clothes."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "未准确执行“正确但偏短”的策略；扩展存在代词指代不一致和表达不自然问题。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": false
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "comfortable"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "clothes"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "T-shirts"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "jeans"
+        }
+      ],
+      "manualReview": [
+        "meaning_preserved",
+        "no_unconfirmed_facts",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A03-003",
+      "node": "A03",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "answer": "I like wear casual clothes."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "润色未做到最小必要修改，错误改变用户偏好，并加入未经确认的具体事实。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": true
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "casual"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "clothes"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "T-shirts"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "jeans"
+        }
+      ],
+      "manualReview": [
+        "meaning_preserved",
+        "no_unconfirmed_facts",
+        "natural_oral_expression"
+      ]
+    },
+    {
+      "caseId": "A03-004",
+      "node": "A03",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "answer": "I like simple clothes because they make me very convenient."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "漏判中式表达“make me very convenient”；未优先完成对原句核心错误的纠正。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": true
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "simple"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "clothes"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "make me very convenient"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "T-shirts"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "jeans"
+        }
+      ],
+      "manualReview": [
+        "meaning_preserved",
+        "no_unconfirmed_facts",
+        "natural_oral_expression"
+      ]
+    },
+    {
+      "caseId": "A03-005",
+      "node": "A03",
+      "question": "When did you start using social media?",
+      "input": {
+        "answer": "I start using social media three years ago."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "漏判过去时错误；扩展内容与题目、原回答及扩展标签不匹配。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": true
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "social media"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "three years ago"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "clothes"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "meaning_preserved",
+        "natural_oral_expression"
+      ]
+    },
+    {
+      "caseId": "A03-006",
+      "node": "A03",
+      "question": "When did you start using social media?",
+      "input": {
+        "answer": "Three years ago."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "未区分语法可接受与回答完整；将时间短语误判为完整回答，并生成无关扩展。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": true
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "social media"
+        },
+        {
+          "path": "polishedAnswer",
+          "contains": "three years ago"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "clothes"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "meaning_preserved",
+        "natural_oral_expression",
+        "instructional_value"
+      ]
+    },
+    {
+      "caseId": "A03-007",
+      "node": "A03",
+      "question": "When did you start using social media?",
+      "input": {
+        "answer": "I don’t know how to answer this question."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "未识别元表达，把未作答内容当成有效答案进入普通润色扩展流程。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "hasMeaningfulPolish",
+          "equals": true
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "I started using social media"
+        },
+        {
+          "path": "polishedAnswer",
+          "notContains": "three years ago"
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "meaning_preserved",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A04-001",
+      "node": "A04",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "firstAnswer": "I like comfortable clothes.",
+        "a03Suggestion": "重说时完整采用上一轮扩展表达。",
+        "secondAnswer": "完整采用上一轮扩展表达"
+      },
+      "baselineResult": "通过",
+      "originalIssue": "采纳判断正确，但反馈文案系统化、生硬，缺少陪练感。",
+      "invalid_test_data": true,
+      "assertions": [],
+      "manualReview": []
+    },
+    {
+      "caseId": "A04-002",
+      "node": "A04",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "firstAnswer": "I like comfortable clothes.",
+        "a03Suggestion": "The main reason is that it feels relaxing and easy for me.",
+        "secondAnswer": "I like comfortable clothes. It makes me feel relax."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "只识别内容增加，漏判重说中新出现的“feel relax”语法错误；反馈缺少明确激励。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "feedbackType",
+          "equals": "needs_adjustment"
+        },
+        {
+          "path": "adoptedExpressions",
+          "arrayLength": 0
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A04-003",
+      "node": "A04",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "firstAnswer": "I like comfortable clothes.",
+        "a03Suggestion": "采用“服装类型＋原因”的表达结构。",
+        "secondAnswer": "I normally choose casual outfits because they help me feel relaxed."
+      },
+      "baselineResult": "通过",
+      "originalIssue": "语义判断基本正确，但反馈未区分同义采纳与部分采纳，未充分肯定用户自主表达。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "feedbackType",
+          "equals": "improved_expression"
+        },
+        {
+          "path": "adoptedExpressions",
+          "arrayLength": 0
+        }
+      ],
+      "manualReview": [
+        "meaning_preserved",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A04-004",
+      "node": "A04",
+      "question": "What kind of clothes do you like to wear?",
+      "input": {
+        "firstAnswer": "I like comfortable clothes.",
+        "a03Suggestion": "",
+        "secondAnswer": "I like comfortable clothes."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "将原样重复误判为表达更清楚、更完整，未识别未采纳且无改善。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "feedbackType",
+          "equals": "needs_adjustment"
+        },
+        {
+          "path": "adoptedExpressions",
+          "arrayLength": 0
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A04-005",
+      "node": "A04",
+      "question": "When did you start using social media?",
+      "input": {
+        "firstAnswer": "Three years ago.",
+        "a03Suggestion": "",
+        "secondAnswer": "Three years ago."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "将原样重复且仍不完整的短回答误判为改善，未结合回答完整性判断。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "feedbackType",
+          "equals": "needs_adjustment"
+        },
+        {
+          "path": "adoptedExpressions",
+          "arrayLength": 0
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    },
+    {
+      "caseId": "A04-006",
+      "node": "A04",
+      "question": "When did you start using social media?",
+      "input": {
+        "firstAnswer": "I started using social media three years ago.",
+        "a03Suggestion": "",
+        "secondAnswer": "I think this question is difficult."
+      },
+      "baselineResult": "不通过",
+      "originalIssue": "未识别重说偏题和元表达，错误给出正向改善反馈。",
+      "invalid_test_data": false,
+      "assertions": [
+        {
+          "path": "source",
+          "equals": "llm"
+        },
+        {
+          "path": "aiProvider",
+          "equals": "siliconflow"
+        },
+        {
+          "path": "fallbackReason",
+          "equals": null
+        },
+        {
+          "path": "feedbackType",
+          "equals": "needs_adjustment"
+        },
+        {
+          "path": "adoptedExpressions",
+          "arrayLength": 0
+        }
+      ],
+      "manualReview": [
+        "relevance",
+        "feedback_actionable",
+        "tone_natural"
+      ]
+    }
+  ]
+}

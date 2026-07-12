@@ -154,63 +154,63 @@ const preHelpByStructure: Record<
   Omit<PreHelpOutput, "answer_structure_type">
 > = {
   basic_fact: {
-    answer_direction_zh: "先直接回答事实，再补一句简单说明。",
-    useful_keywords_en: ["currently", "mainly", "for a while"],
-    sentence_starter_en: "I would say ..., and at the moment ...",
-    caution_zh: "按自己的真实情况说，不需要背答案。",
+    answer_direction_zh: "先直接回答，再补一句说明",
+    useful_keywords_en: ["current situation", "simple reason", "daily life"],
+    sentence_starter_en: "I would say ___. / The simple reason is ___. / It is part of my daily life because ___.",
+    caution_zh: "按真实情况说，不要背答案。",
   },
   preference_reason: {
-    answer_direction_zh: "先说偏好对象，再补一个原因。",
-    useful_keywords_en: ["prefer", "because", "comfortable", "useful"],
-    sentence_starter_en: "I personally prefer ..., mainly because ...",
-    caution_zh: "不要展开成完整故事，补一个原因就够。",
+    answer_direction_zh: "先表明喜好，再补一个原因",
+    useful_keywords_en: ["relaxing", "interesting", "easy to start"],
+    sentence_starter_en: "Yes, I do, mainly because ___. / Not really, because ___. / I usually prefer ___ when ___.",
+    caution_zh: "只补一个原因或场景就够。",
   },
   yes_no_reason: {
-    answer_direction_zh: "先直接表态，再补一个原因。",
-    useful_keywords_en: ["yes, definitely", "not really", "because", "usually"],
-    sentence_starter_en: "Yes, I do / No, not really, because ...",
-    caution_zh: "先回答 yes/no，再解释，别绕太久。",
+    answer_direction_zh: "先直接表态，再补一个原因",
+    useful_keywords_en: ["yes, definitely", "not really", "usually"],
+    sentence_starter_en: "Yes, I do, because ___. / No, not really, because ___. / I usually feel ___ about it.",
+    caution_zh: "先说 yes/no，再简单解释。",
   },
   frequency_situation: {
-    answer_direction_zh: "先说频率，再补发生场景。",
-    useful_keywords_en: ["usually", "quite often", "once in a while", "when"],
-    sentence_starter_en: "I usually ..., especially when ...",
+    answer_direction_zh: "先说频率，再补一个场景",
+    useful_keywords_en: ["every day", "on weekends", "when I have time"],
+    sentence_starter_en: "I usually ___. / I do it when ___. / It happens about ___.",
     caution_zh: "频率不用精确，接近真实情况即可。",
   },
   type_reason: {
-    answer_direction_zh: "先说类型或类别，再补原因或例子。",
-    useful_keywords_en: ["kind of", "for example", "because", "daily"],
-    sentence_starter_en: "I usually like ..., for example ..., because ...",
+    answer_direction_zh: "先说类型，再补原因或例子",
+    useful_keywords_en: ["simple style", "daily use", "easy to find"],
+    sentence_starter_en: "I usually like ___. / It is ___ for me. / For example, I often choose ___.",
     caution_zh: "给一类或一个例子，不要列太多。",
   },
   past_present_compare: {
-    answer_direction_zh: "先说过去情况，再说现在变化。",
-    useful_keywords_en: ["when I was younger", "nowadays", "still", "changed"],
-    sentence_starter_en: "When I was younger, I ..., but now ...",
+    answer_direction_zh: "先说过去，再说现在变化",
+    useful_keywords_en: ["when I was younger", "nowadays", "still"],
+    sentence_starter_en: "When I was younger, I ___. / But now I ___. / The main change is ___.",
     caution_zh: "对比保持简单，不需要讲完整经历。",
   },
   place_description: {
-    answer_direction_zh: "先说明地点或部分，再描述特点。",
-    useful_keywords_en: ["located", "quiet", "convenient", "comfortable"],
-    sentence_starter_en: "It is ..., and the thing I like about it is ...",
+    answer_direction_zh: "先说地点，再补特点或感受",
+    useful_keywords_en: ["quiet area", "fresh air", "comfortable space"],
+    sentence_starter_en: "It is ___. / I like it because ___. / It is a good place to ___.",
     caution_zh: "描述真实感受，不要编造复杂细节。",
   },
   experience_example: {
-    answer_direction_zh: "先说有没有经历，再给简短例子。",
-    useful_keywords_en: ["once", "I remember", "for example", "a few times"],
-    sentence_starter_en: "Yes, I have. For example, I once ...",
+    answer_direction_zh: "先说有无，再补简单例子",
+    useful_keywords_en: ["once or twice", "recently", "a simple example"],
+    sentence_starter_en: "Yes, I have. / For example, I once ___. / Not really, but I would like to ___.",
     caution_zh: "例子一句话即可，不要变成 Part 2。",
   },
   opinion_reason: {
-    answer_direction_zh: "先表达观点，再给一个原因。",
-    useful_keywords_en: ["I think", "useful", "important", "because"],
-    sentence_starter_en: "I think ..., because ...",
+    answer_direction_zh: "先说态度，再补原因或作用",
+    useful_keywords_en: ["useful", "important", "convenient"],
+    sentence_starter_en: "I think ___. / The main reason is ___. / In daily life, it can ___.",
     caution_zh: "观点可以简单，但要补一个原因。",
   },
   choice_compare: {
-    answer_direction_zh: "先选 A 或 B，再简单对比原因。",
-    useful_keywords_en: ["prefer", "rather than", "more convenient", "easier"],
-    sentence_starter_en: "I prefer ... rather than ..., because ...",
+    answer_direction_zh: "先选一边，再补理由或场景",
+    useful_keywords_en: ["more convenient", "easier for me", "more relaxing"],
+    sentence_starter_en: "I prefer ___. / It is more ___ for me. / I usually choose it when ___.",
     caution_zh: "只选一个更自然，不需要两边都详细说。",
   },
 };
@@ -234,10 +234,10 @@ export function generatePreHelp(input: PreHelpInput): AiServiceResult<PreHelpOut
   void PRE_HELP_PROMPT;
 
   const template = preHelpByStructure[input.answerStructureType] ?? {
-    answer_direction_zh: "先直接回答，再补一句原因或场景。",
+    answer_direction_zh: "\u5148\u76f4\u63a5\u56de\u7b54\uff0c\u518d\u8865\u4e00\u53e5\u539f\u56e0\u6216\u573a\u666f",
     useful_keywords_en: ["usually", "because", "for example"],
     sentence_starter_en: "I would say ..., because ...",
-    caution_zh: "按自己的真实情况说，不需要背答案。",
+    caution_zh: "\u6309\u81ea\u5df1\u7684\u771f\u5b9e\u60c5\u51b5\u8bf4\uff0c\u4e0d\u9700\u8981\u80cc\u7b54\u6848\u3002",
   };
 
   return {
@@ -259,23 +259,21 @@ function createContentKeywordsForPreAnswer(input: PreAnswerInput) {
   const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
   const keywordsByIntent: Record<Part1Intent, string[]> = {
-    age: ["exact age", "student", "working life", "feel mature", "still young"],
+    age: ["exact age", "feel mature", "still young"],
     living_place: [
       "city name",
       "hometown",
-      "near my school",
-      "close to work",
       "quiet area",
     ],
-    work_study: ["student", "working life", "daily routine", "practical skills"],
-    preference: ["relaxing", "interesting", "easy to start", "with friends"],
-    frequency: ["every day", "on weekends", "after class", "when I have time"],
-    experience: ["once or twice", "last weekend", "a simple example", "with family"],
-    opinion: ["useful", "important", "convenient", "good for daily life"],
-    choice: ["more convenient", "easier for me", "more relaxing", "better choice"],
-    place: ["quiet area", "fresh air", "nearby place", "comfortable space"],
-    type: ["simple style", "daily use", "comfortable choice", "easy to find"],
-    basic: ["daily life", "simple reason", "comfortable feeling", "current situation"],
+    work_study: ["current role", "daily routine", "practical skills"],
+    preference: ["relaxing", "interesting", "easy to start"],
+    frequency: ["every day", "on weekends", "when I have time"],
+    experience: ["once or twice", "recently", "a simple example"],
+    opinion: ["useful", "important", "convenient"],
+    choice: ["more convenient", "easier for me", "more relaxing"],
+    place: ["quiet area", "fresh air", "comfortable space"],
+    type: ["simple style", "daily use", "easy to find"],
+    basic: ["daily life", "simple reason", "current situation"],
   };
 
   return keywordsByIntent[intent];
@@ -284,38 +282,82 @@ function createContentKeywordsForPreAnswer(input: PreAnswerInput) {
 function createSentenceStartersForPreAnswer(input: PreAnswerInput) {
   const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
-  const startersByIntent: Record<Part1Intent, string> = {
-    age: "I'm ___ years old. / I'm ___ years old, and I feel ___.",
-    living_place: "I live in ___, and it is ___. / I live near ___.",
-    work_study: "I'm currently ___. / At the moment, I ___.",
-    preference: "Yes, I do, mainly because ___. / Not really, because ___.",
-    frequency: "I usually ___, especially when ___.",
-    experience: "Yes, I have. For example, ___. / Not really, but ___.",
-    opinion: "I think ___, because ___.",
-    choice: "I prefer ___ because ___.",
-    place: "It is ___, and I like it because ___.",
-    type: "I usually like ___, because ___.",
-    basic: "I would say ___, because ___.",
+  const startersByIntent: Record<Part1Intent, string[]> = {
+    age: [
+      "I'm ___ years old.",
+      "I'm ___ years old, and I feel ___.",
+      "At this age, I usually feel ___.",
+    ],
+    living_place: [
+      "I live in ___.",
+      "It is ___, so I feel ___.",
+      "The area is ___ for daily life.",
+    ],
+    work_study: [
+      "I'm currently ___.",
+      "My daily routine is ___.",
+      "The main thing I like is ___.",
+    ],
+    preference: [
+      "Yes, I do, mainly because ___.",
+      "Not really, because ___.",
+      "I usually prefer ___ when ___.",
+    ],
+    frequency: [
+      "I usually ___.",
+      "I do it when ___.",
+      "It happens about ___.",
+    ],
+    experience: [
+      "Yes, I have.",
+      "For example, I once ___.",
+      "Not really, but I would like to ___.",
+    ],
+    opinion: [
+      "I think ___.",
+      "The main reason is ___.",
+      "In daily life, it can ___.",
+    ],
+    choice: [
+      "I prefer ___.",
+      "It is more ___ for me.",
+      "I usually choose it when ___.",
+    ],
+    place: [
+      "It is ___.",
+      "I like it because ___.",
+      "It is a good place to ___.",
+    ],
+    type: [
+      "I usually like ___.",
+      "It is ___ for me.",
+      "For example, I often choose ___.",
+    ],
+    basic: [
+      "I would say ___.",
+      "The simple reason is ___.",
+      "It is part of my daily life because ___.",
+    ],
   };
 
-  return startersByIntent[intent];
+  return startersByIntent[intent].join(" / ");
 }
 
 function createDirectionForPreAnswer(input: PreAnswerInput) {
   const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
   const directionsByIntent: Record<Part1Intent, string> = {
-    age: "???????????",
-    living_place: "????????????",
-    work_study: "???????????",
-    preference: "??????????",
-    frequency: "???????????",
-    experience: "???????????",
-    opinion: "???????????",
-    choice: "???????????",
-    place: "???????????",
-    type: "????????????",
-    basic: "????????????",
+    age: "\u5148\u8bf4\u5e74\u9f84\uff0c\u518d\u8865\u4e00\u4e2a\u611f\u53d7",
+    living_place: "\u5148\u8bf4\u5730\u70b9\uff0c\u518d\u8865\u7279\u70b9\u6216\u611f\u53d7",
+    work_study: "\u5148\u8bf4\u5f53\u524d\u72b6\u6001\uff0c\u518d\u8865\u65e5\u5e38\u5185\u5bb9",
+    preference: "\u5148\u8868\u660e\u559c\u597d\uff0c\u518d\u8865\u4e00\u4e2a\u539f\u56e0",
+    frequency: "\u5148\u8bf4\u9891\u7387\uff0c\u518d\u8865\u4e00\u4e2a\u573a\u666f",
+    experience: "\u5148\u8bf4\u6709\u65e0\uff0c\u518d\u8865\u7b80\u5355\u4f8b\u5b50",
+    opinion: "\u5148\u8bf4\u6001\u5ea6\uff0c\u518d\u8865\u539f\u56e0\u6216\u4f5c\u7528",
+    choice: "\u5148\u9009\u4e00\u8fb9\uff0c\u518d\u8865\u7406\u7531\u6216\u573a\u666f",
+    place: "\u5148\u8bf4\u5730\u70b9\uff0c\u518d\u8865\u7279\u70b9\u6216\u611f\u53d7",
+    type: "\u5148\u8bf4\u7c7b\u578b\uff0c\u518d\u8865\u539f\u56e0\u6216\u4f8b\u5b50",
+    basic: "\u5148\u76f4\u63a5\u56de\u7b54\uff0c\u518d\u8865\u4e00\u53e5\u8bf4\u660e",
   };
 
   return directionsByIntent[intent];
@@ -597,25 +639,33 @@ function getSafeExpansionType(input: PolishInput): ExpansionType {
 }
 
 function createSafePolish(input: PolishInput): PolishResult {
-  if (hasMetaAnswerExpression(input.user_answer)) {
+  const answerType = classifyPolishAnswer(input);
+
+  if (answerType === "off_topic_or_meta") {
     return {
       markedTranscript: [{ text: input.user_answer, type: "improve" }],
-      polishedAnswer: input.user_answer.trim(),
+      polishedAnswer:
+        "You haven't really answered the question yet. Start with a direct answer, then add one simple reason or detail.",
       noPolishNeeded: false,
       shouldExpand: true,
-      expansionType: getExpansionType("preference_reason"),
-      expansionSentence: createSafeExpansionSentence(input, getSafeExpansionType(input)),
+      expansionType: "\u8865\u5145\u539f\u56e0" as ExpansionType,
+      expansionSentence: createAnswerPathSentence(input),
       reason:
-        "This sounds more like an answering method, so next time answer the question directly and add one concrete reason.",
+        "This has not really answered the question yet, so give a direct answer and one concrete detail.",
     };
   }
 
   const polishedAnswer = createSafePolishedAnswer(input);
   const answerWordCount = countEnglishWords(polishedAnswer);
-  const noPolishNeeded = isClearNaturalAnswer(input.user_answer, polishedAnswer);
+  const noPolishNeeded =
+    answerType === "natural_complete" &&
+    isClearNaturalAnswer(input.user_answer, polishedAnswer);
   const answeredCoreButShort = isCoreAnswerButShort(input, polishedAnswer);
   const shouldExpand =
-    noPolishNeeded || answeredCoreButShort || input.answerStructureType === "basic_fact"
+    noPolishNeeded ||
+    answeredCoreButShort ||
+    answerType === "correct_but_short" ||
+    answerType === "relevant_incomplete"
       ? answerWordCount < 20
       : answerWordCount < 12;
   const expansionType = shouldExpand
@@ -624,8 +674,11 @@ function createSafePolish(input: PolishInput): PolishResult {
 
   return {
     markedTranscript: createMarkedTranscript(input.user_answer),
-    polishedAnswer: noPolishNeeded || answeredCoreButShort ? "" : polishedAnswer,
-    noPolishNeeded: noPolishNeeded || answeredCoreButShort,
+    polishedAnswer:
+      noPolishNeeded || answerType === "correct_but_short"
+        ? ""
+        : polishedAnswer,
+    noPolishNeeded: noPolishNeeded || answerType === "correct_but_short",
     shouldExpand,
     expansionType,
     expansionSentence: shouldExpand
@@ -637,6 +690,112 @@ function createSafePolish(input: PolishInput): PolishResult {
       ? "This already answers the core question, and one simple detail can make it more like a Part 1 short answer."
       : "The answer already has enough basic information for a short Part 1 response.",
   };
+}
+
+type PolishAnswerType =
+  | "natural_complete"
+  | "correct_but_short"
+  | "grammar_error"
+  | "chinglish"
+  | "relevant_incomplete"
+  | "off_topic_or_meta";
+
+function classifyPolishAnswer(input: PolishInput): PolishAnswerType {
+  const normalizedAnswer = normalizeComparableText(input.user_answer);
+  const wordCountValue = countEnglishWords(input.user_answer);
+
+  if (!normalizedAnswer || hasMetaAnswerExpression(input.user_answer)) {
+    return "off_topic_or_meta";
+  }
+
+  if (!isLikelyAnsweringQuestion(input)) {
+    return "off_topic_or_meta";
+  }
+
+  if (hasGrammarIssue(input.user_answer)) {
+    return "grammar_error";
+  }
+
+  if (hasChinglishExpression(input.user_answer)) {
+    return "chinglish";
+  }
+
+  if (isTimeOnlyAnswerForStartQuestion(input)) {
+    return "relevant_incomplete";
+  }
+
+  if (wordCountValue <= 3 && !isCoreAnswerButShort(input, input.user_answer)) {
+    return "relevant_incomplete";
+  }
+
+  if (wordCountValue < 8 || isCoreAnswerButShort(input, input.user_answer)) {
+    return "correct_but_short";
+  }
+
+  return "natural_complete";
+}
+
+function hasGrammarIssue(answer: string) {
+  return (
+    /\b(they|we|you)\s+is\b/i.test(answer) ||
+    /\bi\s+is\b/i.test(answer) ||
+    /\b(i|we|they|you)\s+start\s+\w+(?:\s+\w+){0,4}\s+ago\b/i.test(answer) ||
+    /\bfeel\s+relax\b/i.test(answer)
+  );
+}
+
+function hasChinglishExpression(answer: string) {
+  return /\b(very like|like wear|more better|clothes very comfortable|make(?:s)? me very convenient)\b/i.test(answer);
+}
+
+function isTimeOnlyAnswerForStartQuestion(input: PolishInput) {
+  return (
+    /\bwhen did you start\b/i.test(input.question_text) &&
+    /\b(?:\w+\s+){0,3}ago\.?$/i.test(input.user_answer.trim()) &&
+    !/\b(i|we|they|you)\b/i.test(input.user_answer)
+  );
+}
+
+function isLikelyAnsweringQuestion(input: PolishInput) {
+  const answer = normalizeComparableText(input.user_answer);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (!answer) {
+    return false;
+  }
+
+  if (/\b(i dont know|i don't know|no idea|this question is difficult|hard to answer|how to answer this question)\b/.test(answer)) {
+    return false;
+  }
+
+  if (intent === "age") {
+    return /\b(\d{1,2}|years? old|young|old)\b/.test(answer);
+  }
+
+  if (intent === "living_place") {
+    return /\b(live|hometown|city|town|village|place|area|there|here)\b/.test(answer);
+  }
+
+  if (intent === "frequency") {
+    return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|week|month|day)\b/.test(answer);
+  }
+
+  if (
+    input.answerStructureType === "past_present_compare" ||
+    /\bwhen did you start\b/i.test(input.question_text)
+  ) {
+    return /\b(ago|last|started|start|since|year|month|week|day)\b/.test(answer);
+  }
+
+  if (intent === "choice") {
+    return /\b(prefer|rather|like|choose|better|more)\b/.test(answer);
+  }
+
+  if (["preference", "opinion", "experience"].includes(intent)) {
+    return /\b(yes|no|like|enjoy|think|feel|have|had|did|do|don't|not|because|maybe|sometimes)\b/.test(answer);
+  }
+
+  return countEnglishWords(answer) >= 2;
 }
 
 export function createMockPolishResult(input: PolishInput): PolishResult {
@@ -660,7 +819,27 @@ function createSafePolishedAnswer(input: PolishInput) {
   }
 
   if (/\blike wear\b/i.test(trimmedAnswer)) {
-    return "I like wearing comfortable clothes, such as T-shirts and jeans.";
+    return trimmedAnswer.replace(/\blike wear\b/gi, "like wearing");
+  }
+
+  if (/\bmake(?:s)? me very convenient\b/i.test(trimmedAnswer)) {
+    return trimmedAnswer.replace(
+      /\bmake(?:s)? me very convenient\b/gi,
+      "are very convenient for me",
+    );
+  }
+
+  if (/\b(i|we|they|you)\s+start\s+(.+?)\s+(\w+\s+)?ago\b/i.test(trimmedAnswer)) {
+    return trimmedAnswer.replace(/\b(i|we|they|you)\s+start\b/i, (match) =>
+      match.replace(/\bstart\b/i, "started"),
+    );
+  }
+
+  if (
+    /\b(?:\w+\s+){0,3}ago\.?$/i.test(trimmedAnswer) &&
+    /\bwhen did you start\b/i.test(input.question_text)
+  ) {
+    return `I started ${getStartedActionFromQuestion(input.question_text)} ${lowercaseInitial(trimmedAnswer.replace(/[.!?]$/, ""))}.`;
   }
 
   if (/\bthey are good\b/i.test(trimmedAnswer)) {
@@ -730,6 +909,13 @@ function isCoreAnswerButShort(input: PolishInput, polishedAnswer: string) {
     return true;
   }
 
+  if (
+    input.answerStructureType === "past_present_compare" &&
+    /\b(ago|last|since|year|month|week|day)\b/.test(normalizedAnswer)
+  ) {
+    return true;
+  }
+
   return normalizeComparableText(polishedAnswer) === normalizedAnswer;
 }
 
@@ -739,6 +925,17 @@ function normalizeComparableText(text: string) {
     .replace(/[^a-z0-9'\s]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getStartedActionFromQuestion(questionText: string) {
+  const match = questionText.match(/\bwhen did you start\s+(.+?)\??$/i);
+  const action = match?.[1]?.trim().replace(/[.!?]$/, "");
+
+  return action || "doing it";
+}
+
+function lowercaseInitial(text: string) {
+  return text ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
 }
 
 function createSafeExpansionSentence(
@@ -760,6 +957,10 @@ function createSafeExpansionSentence(
   }
 
   if (intent === "preference") {
+    if (/\bclothes?\b/i.test(input.user_answer)) {
+      return "They feel relaxing and easy to wear.";
+    }
+
     return "The main reason is that it feels relaxing and easy for me.";
   }
 
@@ -808,11 +1009,33 @@ function createNoPolishExpansionSentence(input: PolishInput) {
   return createSafeExpansionSentence(input, getSafeExpansionType(input));
 }
 
+function createAnswerPathSentence(input: PolishInput) {
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (intent === "frequency") {
+    return "Say how often you do it, then add one simple situation.";
+  }
+
+  if (intent === "choice") {
+    return "Choose one option first, then give one simple reason.";
+  }
+
+  if (intent === "living_place") {
+    return "Say the place first, then add one feature or feeling about it.";
+  }
+
+  if (intent === "opinion") {
+    return "Give your opinion first, then add one practical reason.";
+  }
+
+  return "Answer directly first, then add one short reason or detail.";
+}
+
 function createLegacySafePolish(input: PolishInput) {
   return {
     polished_answer: `${input.user_answer} It is a simple and natural answer for this topic.`,
     suggestion_cn:
-      "保留你的原意，把回答稍微补完整：先直接回答，再加一个简单原因。",
+      "\u4fdd\u7559\u4f60\u7684\u539f\u610f\uff0c\u628a\u56de\u7b54\u7a0d\u5fae\u8865\u5b8c\u6574\uff1a\u5148\u76f4\u63a5\u56de\u7b54\uff0c\u518d\u52a0\u4e00\u4e2a\u7b80\u5355\u539f\u56e0\u3002",
     extensions: [
       {
         type_cn: "补充原因",
@@ -853,25 +1076,62 @@ function normalizeFeedbackType(value: unknown): RetryFeedbackType {
   return "表达改善";
 }
 
-function createSafeRetryFeedback(): RetryFeedbackResult {
-  return {
-    feedback_type: "表达改善",
-    feedback_text: "这次表达更清楚了，回答比上一轮更完整。",
-  };
-}
-
 export function createMockRetryFeedbackResult(
   input: RetryFeedbackInput,
 ): RetryFeedbackResult {
-  if (hasAdoptedExpansionSentence(input)) {
-    return createAdoptedRetryFeedback();
-  }
-
   if (hasMetaAnswerExpression(input.retry_answer)) {
     return createMetaExpressionRetryFeedback(input);
   }
 
-  return createSafeRetryFeedback();
+  if (!isRetryAnswerRelevant(input)) {
+    return {
+      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
+      feedback_text:
+        "\u8fd9\u6b21\u8fd8\u6ca1\u6709\u771f\u6b63\u56de\u7b54\u9898\u76ee\uff0c\u53ef\u4ee5\u5148\u76f4\u63a5\u8bf4\u7b54\u6848\uff0c\u518d\u8865\u4e00\u4e2a\u5177\u4f53\u7ec6\u8282~",
+    };
+  }
+
+  if (!isCompleteRetryAnswer(input.retry_answer)) {
+    return {
+      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
+      feedback_text:
+        "\u8fd9\u6b21\u8fd8\u50cf\u662f\u77ed\u8bed\uff0c\u9700\u8981\u5148\u8bf4\u5b8c\u6574\u53e5\uff0c\u518d\u8865\u4e00\u4e2a\u7b80\u5355\u539f\u56e0~",
+    };
+  }
+
+  if (hasNewGrammarIssue(input.first_answer, input.retry_answer)) {
+    return {
+      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
+      feedback_text:
+        "\u5df2\u7ecf\u5c1d\u8bd5\u8865\u5145\u5185\u5bb9\u4e86\uff0c\u4f46\u6709\u4e00\u4e2a\u5173\u952e\u8bed\u6cd5\u70b9\u8fd8\u8981\u518d\u987a\u4e00\u4e0b~",
+    };
+  }
+
+  if (isBasicallySameAnswer(input.first_answer, input.retry_answer)) {
+    return {
+      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
+      feedback_text:
+        "\u8fd9\u6b21\u548c\u7b2c\u4e00\u6b21\u56de\u7b54\u57fa\u672c\u4e00\u6837\uff0c\u53ef\u4ee5\u8bd5\u7740\u52a0\u5165\u4e0a\u6b21\u7684\u4e00\u53e5\u6da6\u8272\u6216\u6269\u5c55\u5185\u5bb9~",
+    };
+  }
+
+  if (hasAdoptedExpansionSentence(input) || hasAdoptedPolishedAnswer(input)) {
+    return createAdoptedRetryFeedback();
+  }
+
+  if (hasSynonymAdoption(input)) {
+    return {
+      feedback_type: "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType,
+      feedback_text:
+        "\u80fd\u7528\u81ea\u5df1\u7684\u8bdd\u8868\u8fbe\u51fa\u6765\uff0c\u8fdb\u6b65\u5f88\u660e\u663e\uff01",
+    };
+  }
+
+  return {
+    feedback_type: "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType,
+    feedback_text:
+      "\u8fd9\u6b21\u56de\u7b54\u662f\u6709\u6548\u7684\uff0c\u53ef\u4ee5\u518d\u52a0\u5165\u4e0a\u6b21\u5efa\u8bae\u91cc\u7684\u4e00\u4e2a\u5177\u4f53\u8868\u8fbe~",
+  };
 }
 
 function validatePolishResult(result: PolishResult) {
@@ -909,7 +1169,7 @@ function createAdoptedRetryFeedback(): RetryFeedbackResult {
   return {
     feedback_type: "\u91c7\u7eb3\u5efa\u8bae" as RetryFeedbackType,
     feedback_text:
-      "\u8fd9\u6b21\u91cd\u8bf4\u91c7\u7eb3\u4e86\u4e0a\u4e00\u8f6e\u7684\u6269\u5c55\u8868\u8fbe\uff0c\u56de\u7b54\u66f4\u5177\u4f53\u4e86\u3002",
+      "\u5df2\u7ecf\u628a\u5efa\u8bae\u7528\u8fdb\u56de\u7b54\u4e86\uff0c\u5f88\u68d2\uff01",
   };
 }
 
@@ -922,8 +1182,126 @@ function createMetaExpressionRetryFeedback(
 
   return {
     feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
-    feedback_text: feedbackText,
+    feedback_text: feedbackText.endsWith("~") ? feedbackText : `${feedbackText}~`,
   };
+}
+
+function isBasicallySameAnswer(firstAnswer: string, retryAnswer: string) {
+  const first = normalizeComparableText(firstAnswer);
+  const retry = normalizeComparableText(retryAnswer);
+
+  if (!first || !retry) {
+    return false;
+  }
+
+  return first === retry || first.includes(retry) || retry.includes(first);
+}
+
+function isCompleteRetryAnswer(retryAnswer: string) {
+  const normalized = normalizeComparableText(retryAnswer);
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  return (
+    words.length >= 4 &&
+    /\b(i|my|it|they|there|this|that|yes|no)\b/.test(normalized)
+  );
+}
+
+function hasNewGrammarIssue(firstAnswer: string, retryAnswer: string) {
+  return !hasGrammarIssue(firstAnswer) && hasGrammarIssue(retryAnswer);
+}
+
+function isRetryAnswerRelevant(input: RetryFeedbackInput) {
+  const retry = normalizeComparableText(input.retry_answer);
+  const question = input.question_text.toLowerCase();
+
+  if (!retry || hasMetaAnswerExpression(input.retry_answer)) {
+    return false;
+  }
+
+  if (/\b(this question is difficult|hard to answer|i dont know|i don't know|no idea)\b/.test(retry)) {
+    return false;
+  }
+
+  if (/\bwhat kind of clothes\b/i.test(question)) {
+    return /\b(clothes|outfit|outfits|wear|casual|formal|comfortable|relaxed|relaxing)\b/.test(retry);
+  }
+
+  if (/\bwhen did you start\b/i.test(question)) {
+    return /\b(started|start|ago|since|last|year|month|week|day)\b/.test(retry);
+  }
+
+  return true;
+}
+
+function hasAdoptedPolishedAnswer(input: RetryFeedbackInput) {
+  const polished = normalizeComparableText(input.polished_answer);
+  const retry = normalizeComparableText(input.retry_answer);
+
+  if (!polished || polished.length < 12) {
+    return false;
+  }
+
+  return retry.includes(polished) || sharedContentWordCount(polished, retry) >= 4;
+}
+
+function hasSynonymAdoption(input: RetryFeedbackInput) {
+  const suggestion = normalizeComparableText(
+    `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
+  );
+  const retry = normalizeComparableText(input.retry_answer);
+
+  if (!retry) {
+    return false;
+  }
+
+  if (
+    /\bwhat kind of clothes\b/i.test(input.question_text) &&
+    /\b(outfits?|clothes|wear|casual|comfortable|formal)\b/.test(retry) &&
+    /\bbecause\b/.test(retry)
+  ) {
+    return true;
+  }
+
+  if (!suggestion) {
+    return false;
+  }
+
+  return (
+    sharedContentWordCount(suggestion, retry) >= 3 &&
+    !isBasicallySameAnswer(input.first_answer, input.retry_answer)
+  );
+}
+
+function sharedContentWordCount(left: string, right: string) {
+  const stopWords = new Set([
+    "i",
+    "it",
+    "is",
+    "am",
+    "are",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "to",
+    "in",
+    "of",
+    "for",
+    "with",
+    "my",
+    "me",
+    "this",
+    "that",
+  ]);
+  const leftWords = new Set(
+    left.split(/\s+/).filter((word) => word.length > 2 && !stopWords.has(word)),
+  );
+
+  return right
+    .split(/\s+/)
+    .filter((word) => leftWords.has(word) && !stopWords.has(word)).length;
 }
 
 function hasMetaAnswerExpression(answer: string) {
