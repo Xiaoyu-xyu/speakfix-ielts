@@ -1030,7 +1030,7 @@ function hasUnsafePolishedFactChange(polishedAnswer: string, input: PolishInput)
     return true;
   }
 
-  if (intent === "age" && /\b(?:live|city|school|work|job|years? in|for \d+ years?)\b/.test(polished) && !/\b(?:live|city|school|work|job|years? in|for \d+ years?)\b/.test(answer)) {
+  if (intent === "age" && /\b(?:born|birth|live|lived|from|city|hometown|school|university|college|work|job|experience|years? in|for \d+ years?|since)\b/.test(polished) && !/\b(?:born|birth|live|lived|from|city|hometown|school|university|college|work|job|experience|years? in|for \d+ years?|since)\b/.test(answer)) {
     return true;
   }
 
@@ -1093,7 +1093,7 @@ function createSafeNoAnswerPolishResponse(input: PolishInput): ApiPolishResponse
       },
     ],
     polishedAnswer: input.user_answer.trim(),
-    extensionSentence: "Answer directly first, then add one short reason or detail.",
+    extensionSentence: "",
     hasMeaningfulPolish: false,
     source: "llm",
     aiProvider: getAiProvider(),
@@ -1157,8 +1157,7 @@ function finalizePolishResponse({
         },
       ],
       polishedAnswer: input.user_answer.trim(),
-      extensionSentence:
-        "Please record it again so I can polish it safely.",
+      extensionSentence: "",
       hasMeaningfulPolish: false,
     };
   }
@@ -1208,6 +1207,18 @@ function finalizePolishResponse({
           reason: "This can be made more natural.",
         },
       ];
+    }
+
+    if (diagnosis === "correct_but_short") {
+      const safeShortCompletion = createMockPolishResult(input).polishedAnswer;
+
+      if (safeShortCompletion.trim()) {
+        result.polishedAnswer = safeShortCompletion.trim();
+        result.hasMeaningfulPolish = hasAiSubstantiveDifference(
+          result.polishedAnswer,
+          input.user_answer,
+        );
+      }
     }
   } else if (diagnosis === "natural_complete") {
     result.polishedAnswer = input.user_answer.trim();
@@ -1521,6 +1532,7 @@ function createA04Judgement(input: RetryFeedbackInput): A04Judgement {
     introducedNewError,
     containsOffTopicPart,
     regressed: firstAnsweredCore && !answeredCoreQuestion,
+    lowConfidenceTranscript: false,
   };
 }
 

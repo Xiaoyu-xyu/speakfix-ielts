@@ -178,6 +178,7 @@ export type A04Judgement = {
   introducedNewError: boolean;
   containsOffTopicPart: boolean;
   regressed: boolean;
+  lowConfidenceTranscript: boolean;
 };
 
 export type ApiRetryFeedbackMapping = {
@@ -570,6 +571,10 @@ function isNoiseOrFillerAnswer(answer: string) {
   );
 }
 
+function stripTerminalPunctuation(text: string) {
+  return text.trim().replace(/[.!?]+$/g, "").trim();
+}
+
 function isLikelyPlaceAnswerText(answerText: string) {
   const answer = normalizeComparableText(answerText);
   const words = answer.split(/\s+/).filter(Boolean);
@@ -655,6 +660,10 @@ export function isAiLikelyLowConfidenceTranscript(input: PolishInput) {
 }
 
 export function hasAiFixableLanguageIssue(answer: string) {
+  if (/\b(?:sorry|i mean|what i mean is|i meant)\b/i.test(answer)) {
+    return false;
+  }
+
   return (
     hasGrammarIssue(answer) ||
     hasChinglishExpression(answer) ||
@@ -852,6 +861,10 @@ function createSafePolish(input: PolishInput): PolishResult {
 
   const polishedAnswer = createSafePolishedAnswer(input);
   const answerWordCount = countEnglishWords(polishedAnswer);
+  const hasShortCompletion =
+    answerType === "correct_but_short" &&
+    normalizeComparableText(polishedAnswer) !==
+      normalizeComparableText(input.user_answer);
   const noPolishNeeded =
     answerType === "natural_complete" &&
     isClearNaturalAnswer(input.user_answer, polishedAnswer);
@@ -870,10 +883,13 @@ function createSafePolish(input: PolishInput): PolishResult {
   return {
     markedTranscript: createMarkedTranscript(input.user_answer),
     polishedAnswer:
-      noPolishNeeded || answerType === "correct_but_short"
+      noPolishNeeded ||
+      (answerType === "correct_but_short" && !hasShortCompletion)
         ? ""
         : polishedAnswer,
-    noPolishNeeded: noPolishNeeded || answerType === "correct_but_short",
+    noPolishNeeded:
+      noPolishNeeded ||
+      (answerType === "correct_but_short" && !hasShortCompletion),
     shouldExpand,
     expansionType,
     expansionSentence: shouldExpand
@@ -901,6 +917,10 @@ function classifyPolishAnswer(input: PolishInput): PolishAnswerType {
 
   if (!normalizedAnswer || hasMetaAnswerExpression(input.user_answer)) {
     return "off_topic_or_meta";
+  }
+
+  if (isAiCoreShortAnswer(input)) {
+    return "correct_but_short";
   }
 
   if (!isLikelyAnsweringQuestion(input)) {
@@ -1001,12 +1021,9 @@ export function createMockPolishResult(input: PolishInput): PolishResult {
       markedTranscript: [{ text: input.user_answer, type: "improve" }],
       polishedAnswer: "",
       noPolishNeeded: true,
-      shouldExpand: true,
+      shouldExpand: false,
       expansionType: "\u8865\u5145\u539f\u56e0" as ExpansionType,
-      expansionSentence:
-        diagnosis === "low_confidence_transcript"
-          ? "Please record it again so I can polish it safely."
-          : createAnswerPathSentence(input),
+      expansionSentence: "",
       reason:
         diagnosis === "low_confidence_transcript"
           ? "The transcript is not reliable enough to polish safely."
@@ -1038,13 +1055,23 @@ export function createMockPolishResult(input: PolishInput): PolishResult {
 function createSafePolishedAnswer(input: PolishInput) {
   const trimmedAnswer = input.user_answer.trim();
   const lowerAnswer = trimmedAnswer.toLowerCase();
+  const answerWithoutPunctuation = stripTerminalPunctuation(trimmedAnswer);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
   if (/^t-?shirts\.?$/i.test(trimmedAnswer)) {
     return "I usually wear T-shirts because they are comfortable and easy to match.";
   }
 
-  if (/^\d{1,2}$/.test(trimmedAnswer) && /how old/i.test(input.question_text)) {
-    return `I'm ${trimmedAnswer} years old.`;
+  if (/^\d{1,2}$/.test(answerWithoutPunctuation) && intent === "age") {
+    return `I'm ${answerWithoutPunctuation} years old.`;
+  }
+
+  if (
+    (intent === "living_place" || intent === "place") &&
+    isLikelyPlaceAnswerText(trimmedAnswer) &&
+    !/\b(i live|live in|i am from|i'm from|from|hometown|city|town|village|place|area)\b/i.test(trimmedAnswer)
+  ) {
+    return `I live in ${answerWithoutPunctuation}.`;
   }
 
   if (lowerAnswer.includes("they is")) {
@@ -1178,11 +1205,11 @@ function createSafeExpansionSentence(
   const intent = getPart1Intent(input.question_text, input.answerStructureType);
 
   if (intent === "age") {
-    return "I feel I am still young, but I am becoming more independent.";
+    return "I feel ___ about my age.";
   }
 
   if (intent === "living_place") {
-    return "It is convenient for my daily life, and I feel comfortable living there.";
+    return "I like it because ___.";
   }
 
   if (intent === "work_study") {
@@ -1215,11 +1242,11 @@ function createSafeExpansionSentence(
 
   if (input.answerStructureType === "basic_fact") {
     if (/how old/i.test(input.question_text)) {
-      return "I'm at an age where I'm still learning and trying new things.";
+      return "I feel ___ about my age.";
     }
 
     if (/\b(where do you live|house or an apartment|hometown)\b/i.test(input.question_text)) {
-      return "It's a busy city, but it is quite convenient for daily life.";
+      return "I like it because ___.";
     }
 
     return "It's part of my current situation, and it affects my daily routine.";
@@ -1247,7 +1274,15 @@ export function hasAiUnsafeExtension(extensionSentence: string, input: PolishInp
     /\b(?:for example|once|i remember|experience|experienced)\b/,
     /\b(?:history|historical|culture|cultural|famous|tourist|ancient)\b/,
     /\b(?:family|parents|friends|background)\b/,
+    /\b(?:born|birth|birthplace|opportunit(?:y|ies))\b/,
   ];
+
+  if (
+    intent === "age" &&
+    /\b(?:born|birth|live|lived|from|city|hometown|school|university|college|work|job|experience|for|since)\b/.test(extension)
+  ) {
+    return true;
+  }
 
   if (
     ["age", "living_place", "place", "experience"].includes(intent) &&
@@ -1410,7 +1445,9 @@ export function createAiRetryJudgement(input: RetryFeedbackInput): A04Judgement 
   const answeredCoreQuestion = isAiCoreRetryAnswer(input, retry);
   const repeatedOriginal = isAiComparableSame(first, retry);
   const adoptedSuggestion = getAiA04AdoptionState(input, retry);
-  const introducedNewError = !hasGrammarIssue(first) && hasGrammarIssue(retry);
+  const lowConfidenceTranscript = hasA04LowConfidenceTranscript(input, retry);
+  const introducedNewError =
+    !lowConfidenceTranscript && !hasGrammarIssue(first) && hasGrammarIssue(retry);
   const firstAnsweredCore = isAiCoreRetryAnswer(input, first);
 
   return {
@@ -1432,6 +1469,7 @@ export function createAiRetryJudgement(input: RetryFeedbackInput): A04Judgement 
       answeredCoreQuestion &&
       hasAiOffTopicTail(input.question_text, input.answerStructureType, retry),
     regressed: firstAnsweredCore && !answeredCoreQuestion,
+    lowConfidenceTranscript,
   };
 }
 
@@ -1469,6 +1507,15 @@ export function isAiCoreRetryAnswer(
     return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
   }
 
+  if (
+    /\bprefer\b/i.test(input.question_text) &&
+    /\b(study|studying|learn|learning)\b/i.test(input.question_text)
+  ) {
+    return /\b(prefer|rather|study|studying|learn|learning|home|library|school|classroom|comfortable|focus|distractions?)\b/.test(
+      answer,
+    );
+  }
+
   return countEnglishWords(answer) >= 3;
 }
 
@@ -1495,15 +1542,26 @@ function getAiA04AdoptionState(
   input: RetryFeedbackInput,
   retryAnswer: string,
 ): A04AdoptionState {
-  const retry = normalizeComparableText(retryAnswer);
-  const polished = normalizeComparableText(input.polished_answer);
-  const extension = normalizeComparableText(input.expansion_sentence ?? "");
+  const retry = normalizeAdoptionText(retryAnswer);
+  const polished = normalizeAdoptionText(input.polished_answer);
+  const extension = normalizeAdoptionText(input.expansion_sentence ?? "");
+  const extensionFrame = normalizeAdoptionText(
+    (input.expansion_sentence ?? "").replace(/_+/g, ""),
+  );
   const suggestion = normalizeComparableText(
     `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
   );
 
   if (extension && extension.length >= 12 && retry.includes(extension)) {
     return "full";
+  }
+
+  if (
+    extensionFrame &&
+    extensionFrame.length >= 10 &&
+    sharedContentWordCount(extensionFrame, retry) >= 2
+  ) {
+    return "partial";
   }
 
   if (polished && polished.length >= 12 && retry.includes(polished)) {
@@ -1521,6 +1579,41 @@ function getAiA04AdoptionState(
   return "none";
 }
 
+function normalizeAdoptionText(text: string) {
+  return normalizeComparableText(text)
+    .replace(/\b(?:sorry|actually|i mean|what i mean is|i meant)\b/g, " ")
+    .replace(/\b(?:um|uh|er|ah|hmm)\b/g, " ")
+    .replace(/\b(\w+)\s+\1\b/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasA04LowConfidenceTranscript(input: RetryFeedbackInput, retryAnswer: string) {
+  const retry = normalizeAdoptionText(retryAnswer);
+  const suggestion = normalizeAdoptionText(
+    `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
+  );
+
+  if (!retry) {
+    return false;
+  }
+
+  const awkwardAsrPattern =
+    /\b(?:referred to as|refer to as|a referred|as stay|to as stay|i prefered|i perfer|stady|confortable|distraction s)\b/;
+  const severeBrokenPattern =
+    /\b(?:inaudible|unrecognized|unknown words|random words)\b/;
+
+  if (severeBrokenPattern.test(retry)) {
+    return true;
+  }
+
+  return (
+    awkwardAsrPattern.test(retry) &&
+    (sharedContentWordCount(suggestion, retry) >= 2 ||
+      /\b(home|study|comfortable|focus|better|distractions?)\b/.test(retry))
+  );
+}
+
 function isAiComparableSame(first: string, retry: string) {
   const normalizedFirst = normalizeComparableText(first);
   const normalizedRetry = normalizeComparableText(retry);
@@ -1534,6 +1627,30 @@ function isAiComparableSame(first: string, retry: string) {
 export function mapAiRetryJudgementToFeedback(
   judgement: A04Judgement,
 ): ApiRetryFeedbackMapping {
+  if (
+    judgement.lowConfidenceTranscript &&
+    !judgement.answeredCoreQuestion &&
+    judgement.adoptedSuggestion === "none" &&
+    !judgement.independentlyImproved
+  ) {
+    return {
+      feedbackType: "needs_adjustment",
+      feedbackText: "\u6211\u53ef\u80fd\u6ca1\u6709\u5b8c\u5168\u8bc6\u522b\u51c6\u786e\uff0c\u53ef\u4ee5\u518d\u8bf4\u4e00\u6b21~",
+    };
+  }
+
+  if (
+    judgement.answeredCoreQuestion &&
+    judgement.adoptedSuggestion !== "none" &&
+    !judgement.introducedNewError &&
+    !judgement.regressed
+  ) {
+    return {
+      feedbackType: "adopted_suggestion",
+      feedbackText: "\u5df2\u7ecf\u628a\u5efa\u8bae\u7528\u8fdb\u56de\u7b54\u4e86\uff0c\u5f88\u68d2\uff01",
+    };
+  }
+
   if (judgement.answeredCoreQuestion && judgement.containsOffTopicPart) {
     return {
       feedbackType: "needs_adjustment",
@@ -1553,13 +1670,6 @@ export function mapAiRetryJudgementToFeedback(
       feedbackText: judgement.repeatedOriginal
         ? "\u8fd9\u6b21\u548c\u7b2c\u4e00\u6b21\u56de\u7b54\u57fa\u672c\u4e00\u6837\uff0c\u53ef\u4ee5\u8bd5\u7740\u52a0\u5165\u4e0a\u6b21\u7684\u4e00\u53e5\u6da6\u8272\u6216\u6269\u5c55\u5185\u5bb9~"
         : "\u8fd9\u6b21\u8fd8\u9700\u8981\u518d\u8c03\u6574\u4e00\u4e0b\uff0c\u5148\u76f4\u63a5\u56de\u7b54\u9898\u76ee\uff0c\u518d\u8865\u4e00\u4e2a\u76f8\u5173\u7ec6\u8282~",
-    };
-  }
-
-  if (judgement.adoptedSuggestion !== "none") {
-    return {
-      feedbackType: "adopted_suggestion",
-      feedbackText: "\u5df2\u7ecf\u628a\u5efa\u8bae\u7528\u8fdb\u56de\u7b54\u4e86\uff0c\u5f88\u68d2\uff01",
     };
   }
 

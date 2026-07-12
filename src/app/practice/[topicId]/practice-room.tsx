@@ -117,13 +117,20 @@ type AsrApiResponse = {
   latency: number | null;
 };
 
-type AsrFailureType = "no_valid_speech" | "technical_failure" | null;
+type AsrFailureType =
+  | "no_valid_speech"
+  | "chinese_answer"
+  | "mixed_unclear"
+  | "technical_failure"
+  | null;
 type AsrStatus =
   | "idle"
   | "recording"
   | "transcribing"
   | "success"
   | "no_valid_speech"
+  | "chinese_answer"
+  | "mixed_unclear"
   | "technical_failure"
   | "skipped_for_debug_text";
 type AudioStatus =
@@ -416,6 +423,14 @@ function getSupportedRecordingMimeType() {
 }
 
 function getMockFallbackNotice(fallbackReason?: string) {
+  if (fallbackReason === "chinese_answer") {
+    return "这是英语口语练习，请用英文回答哦~";
+  }
+
+  if (fallbackReason === "mixed_unclear") {
+    return "请尽量用完整英文再说一次~";
+  }
+
   if (fallbackReason === "media_recorder_unsupported") {
     return "当前浏览器录音能力不稳定，已使用备用转写继续练习。";
   }
@@ -1014,7 +1029,10 @@ function getAudioFileExtension(mimeType: string) {
       .replace(/\s+/g, " ")
       .trim();
 
+    text = normalizeEnglishPracticeLanguage(text);
     text = applySelfCorrectionCleanup(text);
+    text = cleanupSpeechDisfluencies(text);
+    text = normalizeAsrFragmentation(text);
 
     if (text && !/[.!?]$/.test(text)) {
       text = `${text}.`;
@@ -1023,8 +1041,82 @@ function getAudioFileExtension(mimeType: string) {
     return text;
   }
 
+  function classifyTranscriptLanguageIntent(rawTranscript: string) {
+    const normalized = rawTranscript.normalize("NFKC").trim();
+    const withoutChineseFillers = normalized.replace(/[嗯呃啊哦唔\s，。！？、,.!?-]+/g, "");
+    const chineseChars = normalized.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
+    const englishChars = normalized.match(/[a-z]/gi)?.length ?? 0;
+
+    if (!normalized || (!chineseChars && !englishChars)) {
+      return "no_valid_speech" as const;
+    }
+
+    if (!withoutChineseFillers) {
+      return "no_valid_speech" as const;
+    }
+
+    const safeChineseEntityPattern =
+      /^(?:北京|武汉|上海|广州|深圳|成都|杭州|南京|西安|重庆|天津)$/;
+
+    if (chineseChars > 0 && englishChars === 0) {
+      return safeChineseEntityPattern.test(withoutChineseFillers)
+        ? "english_answer"
+        : "chinese_answer";
+    }
+
+    if (chineseChars > 0 && englishChars > 0) {
+      const chineseAfterSafeEntities = withoutChineseFillers.replace(
+        /北京|武汉|上海|广州|深圳|成都|杭州|南京|西安|重庆|天津/g,
+        "",
+      );
+
+      if (/[\u4e00-\u9fff]/.test(chineseAfterSafeEntities)) {
+        return englishChars > 0 ? "mixed_unclear" : "chinese_answer";
+      }
+    }
+
+    return "english_answer" as const;
+  }
+
+  function normalizeEnglishPracticeLanguage(text: string) {
+    const normalizedCityNames: Record<string, string> = {
+      北京: "Beijing",
+      武汉: "Wuhan",
+      上海: "Shanghai",
+      广州: "Guangzhou",
+      深圳: "Shenzhen",
+      成都: "Chengdu",
+      杭州: "Hangzhou",
+      南京: "Nanjing",
+      西安: "Xi'an",
+      重庆: "Chongqing",
+      天津: "Tianjin",
+    };
+
+    let normalizedText = text
+      .replace(/[嗯呃啊哦唔]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    Object.entries(normalizedCityNames).forEach(([zh, en]) => {
+      normalizedText = normalizedText.replace(new RegExp(zh, "g"), ` ${en} `);
+    });
+
+    normalizedText = normalizedText
+      .replace(/\s+([.,!?])/g, "$1")
+      .replace(/([.,!?])(?=\S)/g, "$1 ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (/[\u4e00-\u9fff]/.test(normalizedText)) {
+      return "";
+    }
+
+    return normalizedText;
+  }
+
   function normalizeDisplayTranscript(cleanedTranscript: string) {
-    const text = cleanedTranscript
+    const text = normalizeAsrFragmentation(cleanedTranscript)
       .replace(/([.!?]){2,}/g, "$1")
       .replace(/\s+([.,!?])/g, "$1")
       .replace(/([.,!?])(?=\S)/g, "$1 ")
@@ -1040,7 +1132,7 @@ function getAudioFileExtension(mimeType: string) {
       .filter(Boolean);
 
     if (sentenceMatches.length <= 1) {
-      return capitalizeDisplaySentence(text);
+      return capitalizeDisplaySentence(fixStandaloneDisplayPronoun(text));
     }
 
     const mergedSentences: string[] = [];
@@ -1064,7 +1156,49 @@ function getAudioFileExtension(mimeType: string) {
     });
 
     return mergedSentences
-      .map((sentence) => capitalizeDisplaySentence(sentence))
+      .map((sentence) => capitalizeDisplaySentence(fixStandaloneDisplayPronoun(sentence)))
+      .map((sentence) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`))
+      .join(" ");
+  }
+
+  function fixStandaloneDisplayPronoun(text: string) {
+    return text.replace(/\bi\b/gi, "I");
+  }
+
+  function normalizeAsrFragmentation(text: string) {
+    const normalizedText = text
+      .replace(/([.!?]){2,}/g, "$1")
+      .replace(/\s+([.,!?])/g, "$1")
+      .replace(/([.,!?])(?=\S)/g, "$1 ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const sentenceMatches = Array.from(normalizedText.matchAll(/[^.!?]+[.!?]?/g))
+      .map((match) => match[0].trim())
+      .filter(Boolean);
+
+    if (sentenceMatches.length <= 1) {
+      return normalizedText;
+    }
+
+    const mergedSentences: string[] = [];
+
+    sentenceMatches.forEach((sentence) => {
+      const normalizedSentence = sentence.replace(/[.!?]$/, "").trim();
+      const previous = mergedSentences.at(-1);
+
+      if (previous && shouldMergeDisplayFragment(previous, normalizedSentence)) {
+        mergedSentences[mergedSentences.length - 1] = `${previous.replace(
+          /[.!?]$/,
+          "",
+        )} ${lowercaseInitialForDisplay(normalizedSentence)}`;
+        return;
+      }
+
+      mergedSentences.push(normalizedSentence);
+    });
+
+    return mergedSentences
       .map((sentence) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`))
       .join(" ");
   }
@@ -1074,8 +1208,24 @@ function getAudioFileExtension(mimeType: string) {
     const nextWords = countDisplayWords(next);
     const combinedWords = previousWords + nextWords;
 
-    if (!previous || !next || combinedWords > 10) {
+    if (!previous || !next || combinedWords > 14) {
       return false;
+    }
+
+    if (endsWithConnectorFragment(previous) || startsWithDependentFragment(next)) {
+      return true;
+    }
+
+    if (startsWithDependentFragment(previous) && startsIndependentSentence(next)) {
+      return true;
+    }
+
+    if (
+      previousWords <= 5 &&
+      startsIndependentSentence(next) &&
+      isIncompleteClause(previous)
+    ) {
+      return true;
     }
 
     if (previousWords <= 2 && nextWords <= 6 && !startsIndependentSentence(next)) {
@@ -1092,6 +1242,24 @@ function getAudioFileExtension(mimeType: string) {
     }
 
     return false;
+  }
+
+  function endsWithConnectorFragment(text: string) {
+    return /\b(?:because|and|but|so|when|if|although|though|while)\s*$/i.test(
+      text.trim(),
+    );
+  }
+
+  function startsWithDependentFragment(text: string) {
+    return /^(?:because|and|but|so|when|if|although|though|while|very|quite|really|at|because of)\b/i.test(
+      text.trim(),
+    );
+  }
+
+  function isIncompleteClause(text: string) {
+    return /\b(?:i|we|you|they|he|she|it)\s+(?:will|would|can|could|should|may|might|am|is|are|was|were|feel|feels|felt|prefer|like|enjoy|try)\s*$/i.test(
+      text.trim(),
+    );
   }
 
   function countDisplayWords(text: string) {
@@ -1126,7 +1294,7 @@ function getAudioFileExtension(mimeType: string) {
     const correctionPatterns = [
       /\b(?:sorry|no|actually)\s*,?\s*(?:i mean|what i mean is|i meant)\s+/gi,
       /\b(?:sorry|no|actually)\s*,?\s+/gi,
-      /\b(?:i mean|what i mean is|i meant)\s+/gi,
+      /\b(?:i mean|what i mean is|i meant)\s*,?\s+/gi,
     ];
     let cleanedText = text;
 
@@ -1142,7 +1310,9 @@ function getAudioFileExtension(mimeType: string) {
       const correction = cleanedText
         .slice(lastMatch.index + lastMatch[0].length)
         .trim();
-      const subjectPrefix = inferCorrectionPrefix(prefix);
+      const subjectPrefix = startsWithAnswerSubject(correction)
+        ? ""
+        : inferCorrectionPrefix(prefix);
 
       cleanedText = `${subjectPrefix}${correction}`.trim();
     });
@@ -1151,6 +1321,10 @@ function getAudioFileExtension(mimeType: string) {
       .replace(/\s+/g, " ")
       .replace(/\s+([.,!?])/g, "$1")
       .trim();
+  }
+
+  function startsWithAnswerSubject(text: string) {
+    return /^(i|i'm|i am|my|it|it's|it is|yes|no)\b/i.test(text.trim());
   }
 
   function inferCorrectionPrefix(prefix: string) {
@@ -1178,6 +1352,17 @@ function getAudioFileExtension(mimeType: string) {
     }
 
     return "";
+  }
+
+  function cleanupSpeechDisfluencies(text: string) {
+    return text
+      .replace(/\b(?:um|uh|er|ah|hmm)\b[,\s]*/gi, "")
+      .replace(/\b(i'm|i am)\s*,\s*\1\b/gi, "$1")
+      .replace(/\b(i|we|you|they)\s*,\s*\1\b/gi, "$1")
+      .replace(/\b(i'm|i am)\s*,\s+(?=\d|twenty|thirty|forty|fifty|sixty)\b/gi, "$1 ")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([.,!?])/g, "$1")
+      .trim();
   }
 
   function hasValidAnswerText({
@@ -1313,6 +1498,14 @@ function getAudioFileExtension(mimeType: string) {
   }
 
   function getAsrFailureType(fallbackReason?: string): AsrFailureType {
+    if (fallbackReason === "chinese_answer") {
+      return "chinese_answer";
+    }
+
+    if (fallbackReason === "mixed_unclear") {
+      return "mixed_unclear";
+    }
+
     if (
       fallbackReason === "empty_audio" ||
       fallbackReason === "recording_too_short" ||
@@ -1334,8 +1527,9 @@ function getAudioFileExtension(mimeType: string) {
       fallbackReason: string,
       latencyMs: number | null = null,
       audioStatus: AudioStatus = "recorded",
+      rawTranscript = "",
     ): AsrResult => ({
-      rawTranscript: "",
+      rawTranscript,
       cleanedTranscript: "",
       displayTranscript: "",
       provider: "siliconflow",
@@ -1345,8 +1539,10 @@ function getAudioFileExtension(mimeType: string) {
       audioMimeType: audioBlob?.type || audioMimeTypeRef.current || "",
       audioStatus,
       asrStatus:
-        getAsrFailureType(fallbackReason) === "no_valid_speech"
-          ? "no_valid_speech"
+        getAsrFailureType(fallbackReason) === "no_valid_speech" ||
+        getAsrFailureType(fallbackReason) === "chinese_answer" ||
+        getAsrFailureType(fallbackReason) === "mixed_unclear"
+          ? getAsrFailureType(fallbackReason) ?? "technical_failure"
           : "technical_failure",
       hasValidSpeech: false,
       failureType: getAsrFailureType(fallbackReason),
@@ -1393,6 +1589,16 @@ function getAudioFileExtension(mimeType: string) {
       const rawTranscript = result.transcript?.trim() ?? "";
 
       if (result.source === "asr" && rawTranscript) {
+        const languageIntent = classifyTranscriptLanguageIntent(rawTranscript);
+
+        if (languageIntent === "chinese_answer") {
+          return failureResult("chinese_answer", result.latency, "recorded", rawTranscript);
+        }
+
+        if (languageIntent === "mixed_unclear") {
+          return failureResult("mixed_unclear", result.latency, "recorded", rawTranscript);
+        }
+
         const cleanedTranscript = normalizeAsrTranscript(rawTranscript);
         const displayTranscript = normalizeDisplayTranscript(cleanedTranscript);
         const hasValidSpeech = hasValidAnswerText({
@@ -2211,8 +2417,6 @@ function getAudioFileExtension(mimeType: string) {
     setIsTranscribing(false);
 
     if (!asrResult.hasValidSpeech) {
-      const isNoValidSpeech = asrResult.failureType === "no_valid_speech";
-
       trackPracticeEvent("transcription_failed", currentQuestionIndex, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         audio_status: asrResult.audioStatus,
@@ -2237,9 +2441,13 @@ function getAudioFileExtension(mimeType: string) {
       });
       resetSpeechState();
       setNotice(
-        isNoValidSpeech
+        asrResult.failureType === "no_valid_speech"
           ? "没有听清，再说一次吧~"
-          : "转写暂时失败，请再试一次~",
+          : asrResult.failureType === "chinese_answer"
+            ? "这是英语口语练习，请用英文回答哦~"
+            : asrResult.failureType === "mixed_unclear"
+              ? "请尽量用完整英文再说一次~"
+              : "转写暂时失败，请再试一次~",
       );
       submitLockedRef.current = false;
       setStatus(kind === "retry" ? "answered" : "readyToAnswer");
@@ -2608,12 +2816,13 @@ function getAudioFileExtension(mimeType: string) {
                       </span>
                     </p>
                   )}
-                  <p className="mt-1">
-                    <span className="font-bold text-ink">扩展：</span>
-                    {answer.polish?.shouldExpand
-                      ? `${answer.polish.expansionType}。${answer.polish.expansionSentence}`
-                      : "本次回答结构已基本完整，可直接再说一次。"}
-                  </p>
+                  {answer.polish?.shouldExpand &&
+                    answer.polish.expansionSentence.trim() && (
+                      <p className="mt-1">
+                        <span className="font-bold text-ink">扩展：</span>
+                        {`${answer.polish.expansionType}。${answer.polish.expansionSentence}`}
+                      </p>
+                    )}
                 </div>
               </div>
             )
