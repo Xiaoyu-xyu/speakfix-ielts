@@ -46,10 +46,14 @@ export type ApiPreAnswerResponse = {
 
 export type PolishInput = {
   topic_id: string;
+  question_id?: string;
   topic_title: string;
   question_text: string;
   answerStructureType: AnswerStructureType;
   user_answer: string;
+  raw_transcript?: string;
+  cleaned_transcript?: string;
+  display_transcript?: string;
   question_index: number;
   target_level: "IELTS 6.0-6.5";
 };
@@ -60,13 +64,12 @@ export type MarkedTranscriptSegment = {
 };
 
 export type ExpansionType =
-  | "补充原因"
-  | "补充例子"
-  | "补充感受"
-  | "补充频率"
-  | "补充对比"
-  | "无需扩展";
-
+  | "\u8865\u5145\u539f\u56e0"
+  | "\u8865\u5145\u4f8b\u5b50"
+  | "\u8865\u5145\u611f\u53d7"
+  | "\u8865\u5145\u9891\u7387"
+  | "\u8865\u5145\u5bf9\u6bd4"
+  | "\u65e0\u9700\u6269\u5c55"
 export type PolishResult = {
   markedTranscript: MarkedTranscriptSegment[];
   polishedAnswer: string;
@@ -97,15 +100,23 @@ export type ApiPolishResponse = {
 export type RetryFeedbackInput = {
   topic_id?: string;
   question_id?: string;
+  question_index?: number;
+  answerStructureType?: AnswerStructureType;
   question_text: string;
   first_answer: string;
+  first_cleaned_transcript?: string;
   polished_answer: string;
   expansion_sentence?: string;
   retry_answer: string;
+  retry_cleaned_transcript?: string;
+  retry_raw_transcript?: string;
+  retry_display_transcript?: string;
 };
 
-export type RetryFeedbackType = "采纳建议" | "表达改善" | "仍需调整";
-
+export type RetryFeedbackType =
+  | "\u91c7\u7eb3\u5efa\u8bae"
+  | "\u8868\u8fbe\u6539\u5584"
+  | "\u4ecd\u9700\u8c03\u6574"
 export type RetryFeedbackResult = {
   feedback_type: RetryFeedbackType;
   feedback_text: string;
@@ -149,72 +160,96 @@ type Part1Intent =
   | "type"
   | "basic";
 
+export type PolishInputDiagnosis =
+  | "natural_complete"
+  | "correct_but_short"
+  | "fixable_language_issue"
+  | "meta_or_no_answer"
+  | "low_confidence_transcript";
+
+export type A04AdoptionState = "none" | "partial" | "full" | "synonym";
+
+export type A04Judgement = {
+  answeredCoreQuestion: boolean;
+  preservedOriginalMeaning: boolean;
+  adoptedSuggestion: A04AdoptionState;
+  independentlyImproved: boolean;
+  repeatedOriginal: boolean;
+  introducedNewError: boolean;
+  containsOffTopicPart: boolean;
+  regressed: boolean;
+};
+
+export type ApiRetryFeedbackMapping = {
+  feedbackType: ApiRetryFeedbackResponse["feedbackType"];
+  feedbackText: string;
+};
+
 const preHelpByStructure: Record<
   AnswerStructureType,
   Omit<PreHelpOutput, "answer_structure_type">
 > = {
   basic_fact: {
-    answer_direction_zh: "先直接回答，再补一句说明",
+    answer_direction_zh: "\u5148\u76f4\u63a5\u56de\u7b54\uff0c\u518d\u8865\u4e00\u53e5\u8bf4\u660e",
     useful_keywords_en: ["current situation", "simple reason", "daily life"],
     sentence_starter_en: "I would say ___. / The simple reason is ___. / It is part of my daily life because ___.",
-    caution_zh: "按真实情况说，不要背答案。",
+    caution_zh: "\u6309\u771f\u5b9e\u60c5\u51b5\u8bf4\uff0c\u4e0d\u8981\u80cc\u7b54\u6848\u3002",
   },
   preference_reason: {
-    answer_direction_zh: "先表明喜好，再补一个原因",
+    answer_direction_zh: "\u5148\u8868\u660e\u559c\u597d\uff0c\u518d\u8865\u4e00\u4e2a\u539f\u56e0",
     useful_keywords_en: ["relaxing", "interesting", "easy to start"],
     sentence_starter_en: "Yes, I do, mainly because ___. / Not really, because ___. / I usually prefer ___ when ___.",
-    caution_zh: "只补一个原因或场景就够。",
+    caution_zh: "\u53ea\u8865\u4e00\u4e2a\u539f\u56e0\u6216\u573a\u666f\u5c31\u591f\u3002",
   },
   yes_no_reason: {
-    answer_direction_zh: "先直接表态，再补一个原因",
+    answer_direction_zh: "\u5148\u76f4\u63a5\u8868\u6001\uff0c\u518d\u8865\u4e00\u4e2a\u539f\u56e0",
     useful_keywords_en: ["yes, definitely", "not really", "usually"],
     sentence_starter_en: "Yes, I do, because ___. / No, not really, because ___. / I usually feel ___ about it.",
-    caution_zh: "先说 yes/no，再简单解释。",
+    caution_zh: "\u5148\u8bf4 yes/no\uff0c\u518d\u7b80\u5355\u89e3\u91ca\u3002",
   },
   frequency_situation: {
-    answer_direction_zh: "先说频率，再补一个场景",
+    answer_direction_zh: "\u5148\u8bf4\u9891\u7387\uff0c\u518d\u8865\u4e00\u4e2a\u573a\u666f",
     useful_keywords_en: ["every day", "on weekends", "when I have time"],
     sentence_starter_en: "I usually ___. / I do it when ___. / It happens about ___.",
-    caution_zh: "频率不用精确，接近真实情况即可。",
+    caution_zh: "\u9891\u7387\u4e0d\u7528\u7cbe\u786e\uff0c\u63a5\u8fd1\u771f\u5b9e\u60c5\u51b5\u5373\u53ef\u3002",
   },
   type_reason: {
-    answer_direction_zh: "先说类型，再补原因或例子",
+    answer_direction_zh: "\u5148\u8bf4\u7c7b\u578b\uff0c\u518d\u8865\u539f\u56e0\u6216\u4f8b\u5b50",
     useful_keywords_en: ["simple style", "daily use", "easy to find"],
     sentence_starter_en: "I usually like ___. / It is ___ for me. / For example, I often choose ___.",
-    caution_zh: "给一类或一个例子，不要列太多。",
+    caution_zh: "\u7ed9\u4e00\u7c7b\u6216\u4e00\u4e2a\u4f8b\u5b50\uff0c\u4e0d\u8981\u5217\u592a\u591a\u3002",
   },
   past_present_compare: {
-    answer_direction_zh: "先说过去，再说现在变化",
+    answer_direction_zh: "\u5148\u8bf4\u8fc7\u53bb\uff0c\u518d\u8bf4\u73b0\u5728\u53d8\u5316",
     useful_keywords_en: ["when I was younger", "nowadays", "still"],
     sentence_starter_en: "When I was younger, I ___. / But now I ___. / The main change is ___.",
-    caution_zh: "对比保持简单，不需要讲完整经历。",
+    caution_zh: "\u5bf9\u6bd4\u4fdd\u6301\u7b80\u5355\uff0c\u4e0d\u9700\u8981\u8bb2\u5b8c\u6574\u7ecf\u5386\u3002",
   },
   place_description: {
-    answer_direction_zh: "先说地点，再补特点或感受",
+    answer_direction_zh: "\u5148\u8bf4\u5730\u70b9\uff0c\u518d\u8865\u7279\u70b9\u6216\u611f\u53d7",
     useful_keywords_en: ["quiet area", "fresh air", "comfortable space"],
     sentence_starter_en: "It is ___. / I like it because ___. / It is a good place to ___.",
-    caution_zh: "描述真实感受，不要编造复杂细节。",
+    caution_zh: "\u63cf\u8ff0\u771f\u5b9e\u611f\u53d7\uff0c\u4e0d\u8981\u7f16\u9020\u590d\u6742\u7ec6\u8282\u3002",
   },
   experience_example: {
-    answer_direction_zh: "先说有无，再补简单例子",
+    answer_direction_zh: "\u5148\u8bf4\u6709\u65e0\uff0c\u518d\u8865\u7b80\u5355\u4f8b\u5b50",
     useful_keywords_en: ["once or twice", "recently", "a simple example"],
     sentence_starter_en: "Yes, I have. / For example, I once ___. / Not really, but I would like to ___.",
-    caution_zh: "例子一句话即可，不要变成 Part 2。",
+    caution_zh: "\u4f8b\u5b50\u4e00\u53e5\u8bdd\u5373\u53ef\uff0c\u4e0d\u8981\u53d8\u6210 Part 2\u3002",
   },
   opinion_reason: {
-    answer_direction_zh: "先说态度，再补原因或作用",
+    answer_direction_zh: "\u5148\u8bf4\u6001\u5ea6\uff0c\u518d\u8865\u539f\u56e0\u6216\u4f5c\u7528",
     useful_keywords_en: ["useful", "important", "convenient"],
     sentence_starter_en: "I think ___. / The main reason is ___. / In daily life, it can ___.",
-    caution_zh: "观点可以简单，但要补一个原因。",
+    caution_zh: "\u89c2\u70b9\u53ef\u4ee5\u7b80\u5355\uff0c\u4f46\u8981\u8865\u4e00\u4e2a\u539f\u56e0\u3002",
   },
   choice_compare: {
-    answer_direction_zh: "先选一边，再补理由或场景",
+    answer_direction_zh: "\u5148\u9009\u4e00\u8fb9\uff0c\u518d\u8865\u7406\u7531\u6216\u573a\u666f",
     useful_keywords_en: ["more convenient", "easier for me", "more relaxing"],
     sentence_starter_en: "I prefer ___. / It is more ___ for me. / I usually choose it when ___.",
-    caution_zh: "只选一个更自然，不需要两边都详细说。",
+    caution_zh: "\u53ea\u9009\u4e00\u4e2a\u66f4\u81ea\u7136\uff0c\u4e0d\u9700\u8981\u4e24\u8fb9\u90fd\u8be6\u7ec6\u8bf4\u3002",
   },
 };
-
 export function createPreHelpInput(
   topic: Topic,
   question: PracticeQuestion,
@@ -445,6 +480,10 @@ function countEnglishWords(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+export function countAiComparableWords(text: string) {
+  return normalizeComparableText(text).split(/\s+/).filter(Boolean).length;
+}
+
 function getPart1Intent(
   questionText: string,
   answerStructureType?: AnswerStructureType,
@@ -495,6 +534,162 @@ function getPart1Intent(
   }
 
   return "basic";
+}
+
+function isLikelyYesNoQuestion(questionText: string, answerStructureType?: AnswerStructureType) {
+  return (
+    answerStructureType === "yes_no_reason" ||
+    /^(do|did|have|are|is|was|were|can|would|will)\b/i.test(
+      questionText.trim(),
+    )
+  );
+}
+
+export function hasAiMetaOrNoAnswerExpression(answer: string) {
+  return (
+    hasMetaAnswerExpression(answer) ||
+    /\b(i\s+don'?t\s+know|no\s+idea|how\s+to\s+answer|this\s+question\s+is\s+difficult|hard\s+to\s+answer)\b/i.test(
+      answer,
+    )
+  );
+}
+
+function hasValidLanguageToken(text: string) {
+  return /[a-z0-9]/i.test(text) && !/^\s*(?:[.\-_,!?]|\[[^\]]+\])+\s*$/.test(text);
+}
+
+function isNoiseOrFillerAnswer(answer: string) {
+  const normalized = normalizeComparableText(answer);
+
+  return (
+    !hasValidLanguageToken(answer) ||
+    /^(um|uh|er|ah|hmm|maybe|ok|okay|well|so|like|noise|music|inaudible|silence|cough|laugh)$/.test(
+      normalized,
+    ) ||
+    /\b(?:noise|music|inaudible|silence|cough|laugh)\b/.test(normalized)
+  );
+}
+
+function isLikelyPlaceAnswerText(answerText: string) {
+  const answer = normalizeComparableText(answerText);
+  const words = answer.split(/\s+/).filter(Boolean);
+
+  if (!answer || isNoiseOrFillerAnswer(answerText) || hasAiMetaOrNoAnswerExpression(answerText)) {
+    return false;
+  }
+
+  if (
+    /^(beautiful|good|great|nice|bad|very good|so good|quite good|convenient|comfortable|because convenient)$/.test(
+      answer,
+    )
+  ) {
+    return false;
+  }
+
+  if (/\b(i live|live in|from|hometown|city|town|village|place|area|here|there)\b/.test(answer)) {
+    return true;
+  }
+
+  if (/^in\s+[a-z][a-z\s-]{1,40}$/.test(answer)) {
+    return true;
+  }
+
+  if (/^(my\s+)?(?:hometown|home town|city|town|village)$/.test(answer)) {
+    return true;
+  }
+
+  if (/^(?:a|an|the|my)?\s*(?:small|big|large|modern|old)?\s*(?:city|town|village|place|area)$/.test(answer)) {
+    return true;
+  }
+
+  return words.length === 1 && /^[a-z][a-z-]{2,}$/.test(words[0]);
+}
+
+export function isAiCoreShortAnswer(input: PolishInput) {
+  const answer = normalizeComparableText(input.user_answer);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (!answer || countAiComparableWords(input.user_answer) > 8 || isNoiseOrFillerAnswer(input.user_answer)) {
+    return false;
+  }
+
+  if (intent === "age") {
+    return /\b\d{1,2}\b|\byears?\s+old\b|\b(twenty|thirty|forty|fifty|sixty)\b/.test(answer);
+  }
+
+  if (intent === "living_place" || intent === "place") {
+    return isLikelyPlaceAnswerText(input.user_answer);
+  }
+
+  if (
+    input.answerStructureType === "past_present_compare" ||
+    /\bwhen did you|when do you|when did you start\b/i.test(input.question_text)
+  ) {
+    return /\b(ago|last|since|yesterday|today|year|month|week|day|started|before|past)\b/.test(answer);
+  }
+
+  if (intent === "frequency") {
+    return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|daily|weekly|monthly)\b/.test(answer);
+  }
+
+  if (isLikelyYesNoQuestion(input.question_text, input.answerStructureType)) {
+    return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
+  }
+
+  return false;
+}
+
+export function isAiLikelyLowConfidenceTranscript(input: PolishInput) {
+  const normalized = normalizeComparableText(input.user_answer);
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  if (!normalized || isNoiseOrFillerAnswer(input.user_answer)) {
+    return true;
+  }
+
+  if (isAiCoreShortAnswer(input)) {
+    return false;
+  }
+
+  return words.length <= 1;
+}
+
+export function hasAiFixableLanguageIssue(answer: string) {
+  return (
+    hasGrammarIssue(answer) ||
+    hasChinglishExpression(answer) ||
+    /\bit\s+make\s+me\b/i.test(answer) ||
+    /\bmake\s+me\s+relax\b/i.test(answer) ||
+    /\b\w+\.\s+(?:a|an|very|beautiful|comfortable|convenient)\b/i.test(answer)
+  );
+}
+
+export function diagnoseAiPolishInput(input: PolishInput): PolishInputDiagnosis {
+  if (hasAiMetaOrNoAnswerExpression(input.user_answer)) {
+    return "meta_or_no_answer";
+  }
+
+  if (isAiCoreShortAnswer(input)) {
+    return "correct_but_short";
+  }
+
+  if (isAiLikelyLowConfidenceTranscript(input)) {
+    return "low_confidence_transcript";
+  }
+
+  if (hasAiFixableLanguageIssue(input.user_answer)) {
+    return "fixable_language_issue";
+  }
+
+  if (countAiComparableWords(input.user_answer) < 8) {
+    return "correct_but_short";
+  }
+
+  return "natural_complete";
+}
+
+export function hasAiSubstantiveDifference(left: string, right: string) {
+  return normalizeComparableText(left) !== normalizeComparableText(right);
 }
 
 function createMarkedTranscript(userAnswer: string): MarkedTranscriptSegment[] {
@@ -553,21 +748,21 @@ function getExpansionType(answerStructureType: AnswerStructureType): ExpansionTy
     answerStructureType === "frequency_situation" ||
     answerStructureType === "basic_fact"
   ) {
-    return "补充频率";
+    return "\u8865\u5145\u9891\u7387";
   }
 
   if (
     answerStructureType === "experience_example" ||
     answerStructureType === "type_reason"
   ) {
-    return "补充例子";
+    return "\u8865\u5145\u4f8b\u5b50";
   }
 
   if (
     answerStructureType === "choice_compare" ||
     answerStructureType === "past_present_compare"
   ) {
-    return "补充对比";
+    return "\u8865\u5145\u5bf9\u6bd4";
   }
 
   if (
@@ -575,30 +770,30 @@ function getExpansionType(answerStructureType: AnswerStructureType): ExpansionTy
     answerStructureType === "yes_no_reason" ||
     answerStructureType === "opinion_reason"
   ) {
-    return "补充原因";
+    return "\u8865\u5145\u539f\u56e0";
   }
 
-  return "补充感受";
+  return "\u8865\u5145\u611f\u53d7";
 }
 
 function createExpansionSentence(expansionType: ExpansionType) {
-  if (expansionType === "补充频率") {
+  if (expansionType === "\u8865\u5145\u9891\u7387") {
     return "I usually talk about this in everyday situations.";
   }
 
-  if (expansionType === "补充例子") {
+  if (expansionType === "\u8865\u5145\u4f8b\u5b50") {
     return "For example, it is something I often notice in my daily life.";
   }
 
-  if (expansionType === "补充对比") {
+  if (expansionType === "\u8865\u5145\u5bf9\u6bd4") {
     return "Compared with the other option, it feels easier and more natural for me.";
   }
 
-  if (expansionType === "补充原因") {
+  if (expansionType === "\u8865\u5145\u539f\u56e0") {
     return "The main reason is that it feels practical and easy for me.";
   }
 
-  if (expansionType === "补充感受") {
+  if (expansionType === "\u8865\u5145\u611f\u53d7") {
     return "It also makes me feel more relaxed and comfortable.";
   }
 
@@ -670,7 +865,7 @@ function createSafePolish(input: PolishInput): PolishResult {
       : answerWordCount < 12;
   const expansionType = shouldExpand
     ? getSafeExpansionType(input)
-    : "无需扩展";
+    : "\u65e0\u9700\u6269\u5c55";
 
   return {
     markedTranscript: createMarkedTranscript(input.user_answer),
@@ -799,7 +994,45 @@ function isLikelyAnsweringQuestion(input: PolishInput) {
 }
 
 export function createMockPolishResult(input: PolishInput): PolishResult {
-  return createSafePolish(input);
+  const diagnosis = diagnoseAiPolishInput(input);
+
+  if (diagnosis === "meta_or_no_answer" || diagnosis === "low_confidence_transcript") {
+    return {
+      markedTranscript: [{ text: input.user_answer, type: "improve" }],
+      polishedAnswer: "",
+      noPolishNeeded: true,
+      shouldExpand: true,
+      expansionType: "\u8865\u5145\u539f\u56e0" as ExpansionType,
+      expansionSentence:
+        diagnosis === "low_confidence_transcript"
+          ? "Please record it again so I can polish it safely."
+          : createAnswerPathSentence(input),
+      reason:
+        diagnosis === "low_confidence_transcript"
+          ? "The transcript is not reliable enough to polish safely."
+          : "This has not really answered the question yet, so give a direct answer and one concrete detail.",
+    };
+  }
+
+  const result = createSafePolish(input);
+  const normalizedAnswer = normalizeComparableText(input.user_answer);
+  const normalizedPolish = normalizeComparableText(result.polishedAnswer);
+
+  if (
+    normalizedAnswer === normalizedPolish &&
+    result.markedTranscript.every((segment) => segment.type === "normal")
+  ) {
+    result.noPolishNeeded = true;
+    result.polishedAnswer = "";
+  }
+
+  if (hasAiUnsafeExtension(result.expansionSentence, input)) {
+    result.shouldExpand = false;
+    result.expansionSentence = "";
+    result.expansionType = "\u65e0\u9700\u6269\u5c55" as ExpansionType;
+  }
+
+  return result;
 }
 
 function createSafePolishedAnswer(input: PolishInput) {
@@ -895,7 +1128,7 @@ function isCoreAnswerButShort(input: PolishInput, polishedAnswer: string) {
 
   if (
     intent === "living_place" &&
-    /\b(i live|live in|hometown|city|now)\b/.test(normalizedAnswer)
+    isLikelyPlaceAnswerText(input.user_answer)
   ) {
     return true;
   }
@@ -995,6 +1228,90 @@ function createSafeExpansionSentence(
   return createExpansionSentence(expansionType);
 }
 
+export function hasAiUnsafeExtension(extensionSentence: string, input: PolishInput) {
+  const extension = normalizeComparableText(extensionSentence);
+  const answer = normalizeComparableText(input.user_answer);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (!extension) {
+    return false;
+  }
+
+  const sensitivePatterns = [
+    /\b(?:for|since)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|many|several)\s+(?:years?|months?|weeks?|days?)\b/,
+    /\b(?:used to|before|in the past|when i was|previously|moved|lived there|lived here)\b/,
+    /\b(?:school|university|college|campus|class|teacher|student|major)\b/,
+    /\b(?:work|working|job|company|office|colleague|career)\b/,
+    /\b(?:wechat|weibo|instagram|facebook|tiktok|twitter|snapchat|youtube)\b/,
+    /\b(?:because my|because i have|because i can|so i can|in order to)\b/,
+    /\b(?:for example|once|i remember|experience|experienced)\b/,
+    /\b(?:history|historical|culture|cultural|famous|tourist|ancient)\b/,
+    /\b(?:family|parents|friends|background)\b/,
+  ];
+
+  if (
+    ["age", "living_place", "place", "experience"].includes(intent) &&
+    sensitivePatterns.some((pattern) => {
+      const match = extension.match(pattern)?.[0];
+      return Boolean(match && !answer.includes(match));
+    })
+  ) {
+    return true;
+  }
+
+  if (hasAiTimeStateConflict(extension, answer)) {
+    return true;
+  }
+
+  if (containsAiDeniedSelfCorrectionFact(extension, input.user_answer)) {
+    return true;
+  }
+
+  return false;
+}
+
+export function hasAiTimeStateConflict(outputText: string, userAnswer: string) {
+  const output = normalizeComparableText(outputText);
+  const answer = normalizeComparableText(userAnswer);
+  const userHasPresent = /\b(now|currently|at the moment)\b/.test(answer);
+  const userHasPast = /\b(used to|before|in the past|ago|last year|yesterday)\b/.test(answer);
+  const userHasDuration = /\b(since|for)\b/.test(answer);
+  const outputHasPresent = /\b(now|currently|at the moment|usually|often|every day)\b/.test(output);
+  const outputHasPast = /\b(used to|before|in the past|ago|last year|yesterday)\b/.test(output);
+  const outputHasDuration = /\b(since|for)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|many|several)\s+(?:years?|months?|weeks?|days?)\b/.test(output);
+
+  if (userHasPresent && outputHasPast && !userHasPast) {
+    return true;
+  }
+
+  if (userHasPast && outputHasPresent && !userHasPresent) {
+    return true;
+  }
+
+  if (outputHasDuration && !userHasDuration) {
+    return true;
+  }
+
+  return false;
+}
+
+function containsAiDeniedSelfCorrectionFact(outputText: string, rawAnswer: string) {
+  const correctionMatch = rawAnswer.match(
+    /\b(.+?)\b(?:sorry|no|actually)\s*,?\s*(?:i mean|what i mean is|i meant)?\s+(.+)/i,
+  );
+
+  if (!correctionMatch) {
+    return false;
+  }
+
+  const deniedWords = normalizeComparableText(correctionMatch[1])
+    .split(/\s+/)
+    .filter((word) => word.length > 3 && !["live", "from", "mean"].includes(word));
+  const output = normalizeComparableText(outputText);
+
+  return deniedWords.some((word) => output.includes(word));
+}
+
 function createNoPolishExpansionSentence(input: PolishInput) {
   const questionText = input.question_text.toLowerCase();
 
@@ -1038,11 +1355,11 @@ function createLegacySafePolish(input: PolishInput) {
       "\u4fdd\u7559\u4f60\u7684\u539f\u610f\uff0c\u628a\u56de\u7b54\u7a0d\u5fae\u8865\u5b8c\u6574\uff1a\u5148\u76f4\u63a5\u56de\u7b54\uff0c\u518d\u52a0\u4e00\u4e2a\u7b80\u5355\u539f\u56e0\u3002",
     extensions: [
       {
-        type_cn: "补充原因",
+        type_cn: "\u8865\u5145\u539f\u56e0",
         sentence_en: "because it makes me feel more comfortable.",
       },
       {
-        type_cn: "补充频率",
+        type_cn: "\u8865\u5145\u9891\u7387",
         sentence_en: "I usually mention this in daily conversations.",
       },
     ],
@@ -1066,72 +1383,211 @@ function normalizeFeedbackType(value: unknown): RetryFeedbackType {
   }
 
   if (
-    value === "采纳建议" ||
-    value === "表达改善" ||
-    value === "仍需调整"
+    value === "\u91c7\u7eb3\u5efa\u8bae" ||
+    value === "\u8868\u8fbe\u6539\u5584" ||
+    value === "\u4ecd\u9700\u8c03\u6574"
   ) {
     return value;
   }
 
-  return "表达改善";
+  return "\u8868\u8fbe\u6539\u5584";
 }
 
 export function createMockRetryFeedbackResult(
   input: RetryFeedbackInput,
 ): RetryFeedbackResult {
-  if (hasMetaAnswerExpression(input.retry_answer)) {
-    return createMetaExpressionRetryFeedback(input);
+  const judgement = createAiRetryJudgement(input);
+  const mapped = mapAiRetryJudgementToFeedback(judgement);
+
+  return {
+    feedback_type: mapApiRetryFeedbackTypeToLocal(mapped.feedbackType),
+    feedback_text: mapped.feedbackText,
+  };
+}
+export function createAiRetryJudgement(input: RetryFeedbackInput): A04Judgement {
+  const first = input.first_cleaned_transcript ?? input.first_answer;
+  const retry = input.retry_cleaned_transcript ?? input.retry_answer;
+  const answeredCoreQuestion = isAiCoreRetryAnswer(input, retry);
+  const repeatedOriginal = isAiComparableSame(first, retry);
+  const adoptedSuggestion = getAiA04AdoptionState(input, retry);
+  const introducedNewError = !hasGrammarIssue(first) && hasGrammarIssue(retry);
+  const firstAnsweredCore = isAiCoreRetryAnswer(input, first);
+
+  return {
+    answeredCoreQuestion,
+    preservedOriginalMeaning: answeredCoreQuestion || !firstAnsweredCore,
+    adoptedSuggestion,
+    independentlyImproved:
+      answeredCoreQuestion &&
+      !repeatedOriginal &&
+      adoptedSuggestion === "none" &&
+      (countAiComparableWords(retry) > countAiComparableWords(first) ||
+        sharedContentWordCount(
+          normalizeComparableText(first),
+          normalizeComparableText(retry),
+        ) >= 2),
+    repeatedOriginal,
+    introducedNewError,
+    containsOffTopicPart:
+      answeredCoreQuestion &&
+      hasAiOffTopicTail(input.question_text, input.answerStructureType, retry),
+    regressed: firstAnsweredCore && !answeredCoreQuestion,
+  };
+}
+
+export function isAiCoreRetryAnswer(
+  input: RetryFeedbackInput,
+  answerText: string,
+) {
+  const answer = normalizeComparableText(answerText);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (!answer || hasAiMetaOrNoAnswerExpression(answerText) || isNoiseOrFillerAnswer(answerText)) {
+    return false;
   }
 
-  if (!isRetryAnswerRelevant(input)) {
+  if (intent === "age") {
+    return /\b\d{1,2}\b|\byears? old\b|\b(twenty|thirty|forty|fifty|sixty)\b/.test(answer);
+  }
+
+  if (intent === "living_place" || intent === "place") {
+    return isLikelyPlaceAnswerText(answerText);
+  }
+
+  if (intent === "frequency") {
+    return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|daily|weekly|monthly)\b/.test(answer);
+  }
+
+  if (
+    input.answerStructureType === "past_present_compare" ||
+    /\bwhen did you start\b/i.test(input.question_text)
+  ) {
+    return /\b(ago|last|since|yesterday|today|year|month|week|day|started|before|past)\b/.test(answer);
+  }
+
+  if (isLikelyYesNoQuestion(input.question_text, input.answerStructureType)) {
+    return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
+  }
+
+  return countEnglishWords(answer) >= 3;
+}
+
+export function hasAiOffTopicTail(
+  questionText: string,
+  answerStructureType: AnswerStructureType | undefined,
+  retryAnswer: string,
+) {
+  const intent = getPart1Intent(questionText, answerStructureType);
+  const answer = normalizeComparableText(retryAnswer);
+
+  if (intent === "age") {
+    return /\b(live|lived|city|hometown|school|work|job|for \d+ years?|since)\b/.test(answer);
+  }
+
+  if (intent === "living_place" || intent === "place") {
+    return /\b(age|years old|work as|study major)\b/.test(answer);
+  }
+
+  return false;
+}
+
+function getAiA04AdoptionState(
+  input: RetryFeedbackInput,
+  retryAnswer: string,
+): A04AdoptionState {
+  const retry = normalizeComparableText(retryAnswer);
+  const polished = normalizeComparableText(input.polished_answer);
+  const extension = normalizeComparableText(input.expansion_sentence ?? "");
+  const suggestion = normalizeComparableText(
+    `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
+  );
+
+  if (extension && extension.length >= 12 && retry.includes(extension)) {
+    return "full";
+  }
+
+  if (polished && polished.length >= 12 && retry.includes(polished)) {
+    return "full";
+  }
+
+  if (suggestion && sharedContentWordCount(suggestion, retry) >= 4) {
+    return "partial";
+  }
+
+  if (suggestion && sharedContentWordCount(suggestion, retry) >= 3) {
+    return "synonym";
+  }
+
+  return "none";
+}
+
+function isAiComparableSame(first: string, retry: string) {
+  const normalizedFirst = normalizeComparableText(first);
+  const normalizedRetry = normalizeComparableText(retry);
+
+  return (
+    Boolean(normalizedFirst && normalizedRetry) &&
+    normalizedFirst === normalizedRetry
+  );
+}
+
+export function mapAiRetryJudgementToFeedback(
+  judgement: A04Judgement,
+): ApiRetryFeedbackMapping {
+  if (judgement.answeredCoreQuestion && judgement.containsOffTopicPart) {
     return {
-      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
-      feedback_text:
-        "\u8fd9\u6b21\u8fd8\u6ca1\u6709\u771f\u6b63\u56de\u7b54\u9898\u76ee\uff0c\u53ef\u4ee5\u5148\u76f4\u63a5\u8bf4\u7b54\u6848\uff0c\u518d\u8865\u4e00\u4e2a\u5177\u4f53\u7ec6\u8282~",
+      feedbackType: "needs_adjustment",
+      feedbackText:
+        "\u524d\u534a\u53e5\u5df2\u7ecf\u56de\u7b54\u4e86\u9898\u76ee\uff0c\u540e\u9762\u7684\u5185\u5bb9\u548c\u95ee\u9898\u5173\u7cfb\u4e0d\u5927\uff0c\u53ef\u4ee5\u5220\u6389\u6216\u6362\u6210\u66f4\u76f8\u5173\u7684\u8865\u5145~",
     };
   }
 
-  if (!isCompleteRetryAnswer(input.retry_answer)) {
+  if (
+    !judgement.answeredCoreQuestion ||
+    judgement.repeatedOriginal ||
+    judgement.regressed ||
+    judgement.introducedNewError
+  ) {
     return {
-      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
-      feedback_text:
-        "\u8fd9\u6b21\u8fd8\u50cf\u662f\u77ed\u8bed\uff0c\u9700\u8981\u5148\u8bf4\u5b8c\u6574\u53e5\uff0c\u518d\u8865\u4e00\u4e2a\u7b80\u5355\u539f\u56e0~",
+      feedbackType: "needs_adjustment",
+      feedbackText: judgement.repeatedOriginal
+        ? "\u8fd9\u6b21\u548c\u7b2c\u4e00\u6b21\u56de\u7b54\u57fa\u672c\u4e00\u6837\uff0c\u53ef\u4ee5\u8bd5\u7740\u52a0\u5165\u4e0a\u6b21\u7684\u4e00\u53e5\u6da6\u8272\u6216\u6269\u5c55\u5185\u5bb9~"
+        : "\u8fd9\u6b21\u8fd8\u9700\u8981\u518d\u8c03\u6574\u4e00\u4e0b\uff0c\u5148\u76f4\u63a5\u56de\u7b54\u9898\u76ee\uff0c\u518d\u8865\u4e00\u4e2a\u76f8\u5173\u7ec6\u8282~",
     };
   }
 
-  if (hasNewGrammarIssue(input.first_answer, input.retry_answer)) {
+  if (judgement.adoptedSuggestion !== "none") {
     return {
-      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
-      feedback_text:
-        "\u5df2\u7ecf\u5c1d\u8bd5\u8865\u5145\u5185\u5bb9\u4e86\uff0c\u4f46\u6709\u4e00\u4e2a\u5173\u952e\u8bed\u6cd5\u70b9\u8fd8\u8981\u518d\u987a\u4e00\u4e0b~",
+      feedbackType: "adopted_suggestion",
+      feedbackText: "\u5df2\u7ecf\u628a\u5efa\u8bae\u7528\u8fdb\u56de\u7b54\u4e86\uff0c\u5f88\u68d2\uff01",
     };
   }
 
-  if (isBasicallySameAnswer(input.first_answer, input.retry_answer)) {
+  if (judgement.independentlyImproved) {
     return {
-      feedback_type: "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType,
-      feedback_text:
-        "\u8fd9\u6b21\u548c\u7b2c\u4e00\u6b21\u56de\u7b54\u57fa\u672c\u4e00\u6837\uff0c\u53ef\u4ee5\u8bd5\u7740\u52a0\u5165\u4e0a\u6b21\u7684\u4e00\u53e5\u6da6\u8272\u6216\u6269\u5c55\u5185\u5bb9~",
-    };
-  }
-
-  if (hasAdoptedExpansionSentence(input) || hasAdoptedPolishedAnswer(input)) {
-    return createAdoptedRetryFeedback();
-  }
-
-  if (hasSynonymAdoption(input)) {
-    return {
-      feedback_type: "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType,
-      feedback_text:
-        "\u80fd\u7528\u81ea\u5df1\u7684\u8bdd\u8868\u8fbe\u51fa\u6765\uff0c\u8fdb\u6b65\u5f88\u660e\u663e\uff01",
+      feedbackType: "improved_expression",
+      feedbackText: "\u8fd9\u6b21\u56de\u7b54\u66f4\u5b8c\u6574\u4e86\uff0c\u53ef\u4ee5\u7ee7\u7eed\u4fdd\u6301\u8fd9\u4e2a\u65b9\u5411~",
     };
   }
 
   return {
-    feedback_type: "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType,
-    feedback_text:
-      "\u8fd9\u6b21\u56de\u7b54\u662f\u6709\u6548\u7684\uff0c\u53ef\u4ee5\u518d\u52a0\u5165\u4e0a\u6b21\u5efa\u8bae\u91cc\u7684\u4e00\u4e2a\u5177\u4f53\u8868\u8fbe~",
+    feedbackType: "improved_expression",
+    feedbackText: "\u8fd9\u6b21\u56de\u7b54\u662f\u6709\u6548\u7684\uff0c\u53ef\u4ee5\u518d\u52a0\u5165\u4e00\u4e2a\u66f4\u5177\u4f53\u7684\u76f8\u5173\u7ec6\u8282~",
   };
+}
+
+function mapApiRetryFeedbackTypeToLocal(
+  feedbackType: ApiRetryFeedbackResponse["feedbackType"],
+): RetryFeedbackType {
+  if (feedbackType === "adopted_suggestion") {
+    return "\u91c7\u7eb3\u5efa\u8bae" as RetryFeedbackType;
+  }
+
+  if (feedbackType === "needs_adjustment") {
+    return "\u4ecd\u9700\u8c03\u6574" as RetryFeedbackType;
+  }
+
+  return "\u8868\u8fbe\u6539\u5584" as RetryFeedbackType;
 }
 
 function validatePolishResult(result: PolishResult) {
@@ -1360,7 +1816,7 @@ function mapApiPolishToPolishResult(
     shouldExpand: Boolean(result.extensionSentence.trim()),
     expansionType: result.extensionSentence.trim()
       ? fallback.expansionType
-      : ("鏃犻渶鎵╁睍" as ExpansionType),
+      : ("\u65e0\u9700\u6269\u5c55" as ExpansionType),
     expansionSentence: result.extensionSentence,
     reason: result.extensionSentence.trim()
       ? "The answer is short, so one light extension can make it easier to speak."
@@ -1399,9 +1855,13 @@ export async function generatePolishSuggestion(
   try {
     const result = await callAiRoute<ApiPolishResponse>("/api/ai/polish", {
       topicId: input.topic_id,
-      questionId: `${input.topic_id}-${input.question_index}`,
+      questionId: input.question_id ?? `${input.topic_id}-${input.question_index}`,
+      questionIndex: input.question_index,
       questionText: input.question_text,
-      userTranscript: input.user_answer,
+      userTranscript: input.cleaned_transcript ?? input.user_answer,
+      cleanedTranscript: input.cleaned_transcript ?? input.user_answer,
+      rawTranscript: input.raw_transcript ?? "",
+      displayTranscript: input.display_transcript ?? input.cleaned_transcript ?? input.user_answer,
       answerStructureType: input.answerStructureType,
     });
     const mappedResult = mapApiPolishToPolishResult(result, fallback);
@@ -1449,11 +1909,17 @@ export async function generateRetryFeedback(
       {
         topicId: input.topic_id ?? "",
         questionId: input.question_id ?? "",
+        questionIndex: input.question_index,
         questionText: input.question_text,
-        firstTranscript: input.first_answer,
+        answerStructureType: input.answerStructureType ?? "",
+        firstTranscript: input.first_cleaned_transcript ?? input.first_answer,
+        firstCleanedTranscript: input.first_cleaned_transcript ?? input.first_answer,
         polishedAnswer: input.polished_answer,
         extensionSentence: input.expansion_sentence ?? "",
-        retryTranscript: input.retry_answer,
+        retryTranscript: input.retry_cleaned_transcript ?? input.retry_answer,
+        retryCleanedTranscript: input.retry_cleaned_transcript ?? input.retry_answer,
+        retryRawTranscript: input.retry_raw_transcript ?? "",
+        retryDisplayTranscript: input.retry_display_transcript ?? input.retry_cleaned_transcript ?? input.retry_answer,
       },
     );
     const mappedResult = mapApiRetryFeedbackToRetryFeedbackResult(result);
@@ -1495,13 +1961,22 @@ export function createPolishInput(
   question: PracticeQuestion,
   questionIndex: number,
   userAnswer: string,
+  transcripts?: {
+    rawTranscript?: string;
+    cleanedTranscript?: string;
+    displayTranscript?: string;
+  },
 ): PolishInput {
   return {
     topic_id: topic.id,
+    question_id: question.id,
     topic_title: topic.title,
     question_text: question.text,
     answerStructureType: question.answerStructureType,
     user_answer: userAnswer,
+    raw_transcript: transcripts?.rawTranscript ?? userAnswer,
+    cleaned_transcript: transcripts?.cleanedTranscript ?? userAnswer,
+    display_transcript: transcripts?.displayTranscript ?? userAnswer,
     question_index: questionIndex + 1,
     target_level: "IELTS 6.0-6.5",
   };

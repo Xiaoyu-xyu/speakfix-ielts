@@ -38,6 +38,9 @@ type AnswerRecord = {
   kind: "first" | "retry";
   duration: number;
   text: string;
+  rawTranscript: string;
+  cleanedTranscript: string;
+  displayTranscript: string;
   polishExpanded: boolean;
   assistGenerating: boolean;
   polish?: {
@@ -135,6 +138,7 @@ type AudioStatus =
 type AsrResult = {
   rawTranscript: string;
   cleanedTranscript: string;
+  displayTranscript: string;
   provider: "siliconflow";
   source: "asr" | "none";
   fallbackReason?: string;
@@ -165,8 +169,29 @@ type TranscriptSubmissionMeta = {
   asrStatus: AsrStatus;
   rawTranscript: string;
   cleanedTranscript: string;
+  displayTranscript: string;
   hasValidSpeech: boolean;
   failureType: AsrFailureType;
+};
+
+type SubmissionSnapshot = {
+  topicId: string;
+  questionId: string;
+  questionIndex: number;
+  questionText: string;
+  answerStructureType: Topic["questions"][number]["answerStructureType"];
+  rawTranscript: string;
+  cleanedTranscript: string;
+  displayTranscript: string;
+};
+
+type RetrySubmissionSnapshot = SubmissionSnapshot & {
+  firstAnswerCleanedTranscript: string;
+  polishedAnswer: string;
+  extensionSentence: string;
+  retryRawTranscript: string;
+  retryCleanedTranscript: string;
+  retryDisplayTranscript: string;
 };
 
 type IconProps = {
@@ -998,6 +1023,105 @@ function getAudioFileExtension(mimeType: string) {
     return text;
   }
 
+  function normalizeDisplayTranscript(cleanedTranscript: string) {
+    const text = cleanedTranscript
+      .replace(/([.!?]){2,}/g, "$1")
+      .replace(/\s+([.,!?])/g, "$1")
+      .replace(/([.,!?])(?=\S)/g, "$1 ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!text) {
+      return "";
+    }
+
+    const sentenceMatches = Array.from(text.matchAll(/[^.!?]+[.!?]?/g))
+      .map((match) => match[0].trim())
+      .filter(Boolean);
+
+    if (sentenceMatches.length <= 1) {
+      return capitalizeDisplaySentence(text);
+    }
+
+    const mergedSentences: string[] = [];
+
+    sentenceMatches.forEach((sentence) => {
+      const normalizedSentence = sentence.replace(/[.!?]$/, "").trim();
+      const previous = mergedSentences.at(-1);
+
+      if (
+        previous &&
+        shouldMergeDisplayFragment(previous, normalizedSentence)
+      ) {
+        mergedSentences[mergedSentences.length - 1] = `${previous.replace(
+          /[.!?]$/,
+          "",
+        )} ${lowercaseInitialForDisplay(normalizedSentence)}`;
+        return;
+      }
+
+      mergedSentences.push(normalizedSentence);
+    });
+
+    return mergedSentences
+      .map((sentence) => capitalizeDisplaySentence(sentence))
+      .map((sentence) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`))
+      .join(" ");
+  }
+
+  function shouldMergeDisplayFragment(previous: string, next: string) {
+    const previousWords = countDisplayWords(previous);
+    const nextWords = countDisplayWords(next);
+    const combinedWords = previousWords + nextWords;
+
+    if (!previous || !next || combinedWords > 10) {
+      return false;
+    }
+
+    if (previousWords <= 2 && nextWords <= 6 && !startsIndependentSentence(next)) {
+      return true;
+    }
+
+    if (
+      previousWords <= 5 &&
+      nextWords <= 4 &&
+      !containsFiniteVerb(next) &&
+      !startsIndependentSentence(next)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function countDisplayWords(text: string) {
+    return text.split(/\s+/).filter(Boolean).length;
+  }
+
+  function startsIndependentSentence(text: string) {
+    return /^(i|we|you|they|he|she|there|this|that|yes|no|but|and)\b/i.test(
+      text.trim(),
+    );
+  }
+
+  function containsFiniteVerb(text: string) {
+    return /\b(am|is|are|was|were|do|does|did|have|has|had|live|like|prefer|think|feel|study|work|go|use|started?)\b/i.test(
+      text,
+    );
+  }
+
+  function lowercaseInitialForDisplay(text: string) {
+    return text ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
+  }
+
+  function capitalizeDisplaySentence(text: string) {
+    const trimmedText = text.trim();
+
+    return trimmedText
+      ? `${trimmedText.charAt(0).toUpperCase()}${trimmedText.slice(1)}`
+      : trimmedText;
+  }
+
   function applySelfCorrectionCleanup(text: string) {
     const correctionPatterns = [
       /\b(?:sorry|no|actually)\s*,?\s*(?:i mean|what i mean is|i meant)\s+/gi,
@@ -1056,10 +1180,18 @@ function getAudioFileExtension(mimeType: string) {
     return "";
   }
 
-  function hasValidLanguageText(cleanedTranscript: string) {
+  function hasValidAnswerText({
+    cleanedTranscript,
+    questionText,
+    answerStructureType,
+  }: {
+    cleanedTranscript: string;
+    questionText: string;
+    answerStructureType: Topic["questions"][number]["answerStructureType"];
+  }) {
     const normalizedText = cleanedTranscript
       .toLowerCase()
-      .replace(/[^a-z'\s]/g, " ")
+      .replace(/[^a-z0-9'\s-]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -1086,12 +1218,98 @@ function getAudioFileExtension(mimeType: string) {
       return false;
     }
 
+    const answerText = meaningfulWords.join(" ");
+    const allowsShortAnswer = allowsShortAnswerForQuestion(
+      questionText,
+      answerStructureType,
+      answerText,
+    );
+
+    if (allowsShortAnswer && meaningfulWords.length <= 2) {
+      return hasShortAnswerSignal(answerText, questionText, answerStructureType);
+    }
+
     return (
-      meaningfulWords.length >= 2 ||
+      meaningfulWords.length >= 3 ||
       /^(yes|no|yeah|nope|sometimes|usually|maybe|sure)$/.test(
-        meaningfulWords.join(" "),
+        answerText,
       )
     );
+  }
+
+  function allowsShortAnswerForQuestion(
+    questionText: string,
+    answerStructureType: Topic["questions"][number]["answerStructureType"],
+    answerText: string,
+  ) {
+    const question = questionText.toLowerCase();
+
+    return (
+      /\bhow old\b/.test(question) ||
+      /\b(where do you live|where are you from|hometown|city|town|village)\b/.test(
+        question,
+      ) ||
+      /\bwhen did you|when do you|how often|do you often|usually\b/.test(
+        question,
+      ) ||
+      /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)$/.test(
+        answerText,
+      ) ||
+      answerStructureType === "basic_fact" ||
+      answerStructureType === "frequency_situation" ||
+      answerStructureType === "yes_no_reason" ||
+      answerStructureType === "past_present_compare"
+    );
+  }
+
+  function hasShortAnswerSignal(
+    answerText: string,
+    questionText: string,
+    answerStructureType: Topic["questions"][number]["answerStructureType"],
+  ) {
+    const question = questionText.toLowerCase();
+
+    if (/^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)$/.test(answerText)) {
+      return true;
+    }
+
+    if (/\bhow old\b/.test(question)) {
+      return (
+        /\b\d{1,2}\b/.test(answerText) ||
+        /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?\b/.test(
+          answerText,
+        ) ||
+        /\byears?\s+old\b/.test(answerText)
+      );
+    }
+
+    if (
+      /\b(where do you live|where are you from|hometown|city|town|village)\b/.test(
+        question,
+      )
+    ) {
+      return /^[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?$/.test(answerText);
+    }
+
+    if (
+      /\bwhen did you|when do you\b/.test(question) ||
+      answerStructureType === "past_present_compare"
+    ) {
+      return /\b(ago|last|since|yesterday|today|year|month|week|day|morning|evening|night)\b/.test(
+        answerText,
+      );
+    }
+
+    if (
+      /\bhow often|do you often|usually\b/.test(question) ||
+      answerStructureType === "frequency_situation"
+    ) {
+      return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|daily|weekly|monthly)\b/.test(
+        answerText,
+      );
+    }
+
+    return false;
   }
 
   function getAsrFailureType(fallbackReason?: string): AsrFailureType {
@@ -1119,6 +1337,7 @@ function getAudioFileExtension(mimeType: string) {
     ): AsrResult => ({
       rawTranscript: "",
       cleanedTranscript: "",
+      displayTranscript: "",
       provider: "siliconflow",
       source: "none",
       fallbackReason,
@@ -1175,7 +1394,12 @@ function getAudioFileExtension(mimeType: string) {
 
       if (result.source === "asr" && rawTranscript) {
         const cleanedTranscript = normalizeAsrTranscript(rawTranscript);
-        const hasValidSpeech = hasValidLanguageText(cleanedTranscript);
+        const displayTranscript = normalizeDisplayTranscript(cleanedTranscript);
+        const hasValidSpeech = hasValidAnswerText({
+          cleanedTranscript,
+          questionText: currentQuestion.text,
+          answerStructureType: currentQuestion.answerStructureType,
+        });
 
         if (!hasValidSpeech) {
           return failureResult("invalid_language_text", result.latency);
@@ -1184,6 +1408,7 @@ function getAudioFileExtension(mimeType: string) {
         return {
           rawTranscript,
           cleanedTranscript,
+          displayTranscript,
           provider: "siliconflow",
           source: "asr",
           fallbackReason: undefined,
@@ -1654,13 +1879,29 @@ function getAudioFileExtension(mimeType: string) {
     answerText: string,
     submissionMeta: TranscriptSubmissionMeta,
   ) {
+    const questionSnapshot = currentQuestion;
+    const questionIndexSnapshot = currentQuestionIndex;
+    const cleanedTranscript = submissionMeta.cleanedTranscript || answerText;
+    const rawTranscript = submissionMeta.rawTranscript || cleanedTranscript;
+    const displayTranscript =
+      submissionMeta.displayTranscript || normalizeDisplayTranscript(cleanedTranscript);
+    const submissionSnapshot: SubmissionSnapshot = {
+      topicId: topic.id,
+      questionId: questionSnapshot.id,
+      questionIndex: questionIndexSnapshot + 1,
+      questionText: questionSnapshot.text,
+      answerStructureType: questionSnapshot.answerStructureType,
+      rawTranscript,
+      cleanedTranscript,
+      displayTranscript,
+    };
     const firstAnswer = answers.find(
       (answer) =>
-        answer.questionIndex === currentQuestionIndex && answer.kind === "first",
+        answer.questionIndex === questionIndexSnapshot && answer.kind === "first",
     );
 
-    if (!answerText.trim()) {
-      trackPracticeEvent("transcription_failed", currentQuestionIndex, {
+    if (!cleanedTranscript.trim()) {
+      trackPracticeEvent("transcription_failed", questionIndexSnapshot, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         fallback_reason:
           submissionMeta.fallbackReason ?? "empty_transcription",
@@ -1676,6 +1917,7 @@ function getAudioFileExtension(mimeType: string) {
         asr_status: submissionMeta.asrStatus,
         raw_transcript: submissionMeta.rawTranscript,
         cleaned_transcript: submissionMeta.cleanedTranscript,
+        display_transcript: displayTranscript,
         has_valid_speech: submissionMeta.hasValidSpeech,
         failure_type: submissionMeta.failureType,
         audio_mime_type: submissionMeta.audioMimeType,
@@ -1688,18 +1930,21 @@ function getAudioFileExtension(mimeType: string) {
       return;
     }
 
-    const answerLength = wordCount(answerText);
-    const answerId = `${currentQuestion.id}-${kind}-${Date.now()}`;
+    const answerLength = wordCount(cleanedTranscript);
+    const answerId = `${submissionSnapshot.questionId}-${kind}-${Date.now()}`;
     const answerDuration = Math.max(submissionMeta.recordedSeconds, 4);
     setAnswers((prevAnswers) => [
       ...prevAnswers,
       {
         id: answerId,
         messageType: kind === "retry" ? "retry_answer" : "user_answer",
-        questionIndex: currentQuestionIndex,
+        questionIndex: questionIndexSnapshot,
         kind,
         duration: answerDuration,
-        text: answerText,
+        text: cleanedTranscript,
+        rawTranscript,
+        cleanedTranscript,
+        displayTranscript,
         polishExpanded: true,
         assistGenerating: true,
       },
@@ -1713,43 +1958,70 @@ function getAudioFileExtension(mimeType: string) {
         ? await generatePolishSuggestion(
             createPolishInput(
               topic,
-              currentQuestion,
-              currentQuestionIndex,
-              answerText,
+              questionSnapshot,
+              questionIndexSnapshot,
+              cleanedTranscript,
+              {
+                rawTranscript: submissionSnapshot.rawTranscript,
+                cleanedTranscript: submissionSnapshot.cleanedTranscript,
+                displayTranscript: submissionSnapshot.displayTranscript,
+              },
             ),
           )
         : undefined;
-    const retryFeedbackResult =
+    const retrySnapshot: RetrySubmissionSnapshot | undefined =
       kind === "retry"
+        ? {
+            ...submissionSnapshot,
+            firstAnswerCleanedTranscript:
+              firstAnswer?.cleanedTranscript ?? firstAnswer?.text ?? "",
+            polishedAnswer: firstAnswer?.polish?.polishedAnswer ?? "",
+            extensionSentence: firstAnswer?.polish?.expansionSentence ?? "",
+            retryRawTranscript: rawTranscript,
+            retryCleanedTranscript: cleanedTranscript,
+            retryDisplayTranscript: displayTranscript,
+          }
+        : undefined;
+    const retryFeedbackResult =
+      kind === "retry" && retrySnapshot
         ? await generateRetryFeedback({
-            topic_id: topic.id,
-            question_id: currentQuestion.id,
-            question_text: currentQuestion.text,
-            first_answer: firstAnswer?.text ?? "",
-            polished_answer: firstAnswer?.polish?.polishedAnswer ?? "",
-            expansion_sentence: firstAnswer?.polish?.expansionSentence ?? "",
-            retry_answer: answerText,
+            topic_id: retrySnapshot.topicId,
+            question_id: retrySnapshot.questionId,
+            question_index: retrySnapshot.questionIndex,
+            answerStructureType: retrySnapshot.answerStructureType,
+            question_text: retrySnapshot.questionText,
+            first_answer: retrySnapshot.firstAnswerCleanedTranscript,
+            first_cleaned_transcript: retrySnapshot.firstAnswerCleanedTranscript,
+            polished_answer: retrySnapshot.polishedAnswer,
+            expansion_sentence: retrySnapshot.extensionSentence,
+            retry_answer: retrySnapshot.retryCleanedTranscript,
+            retry_cleaned_transcript: retrySnapshot.retryCleanedTranscript,
+            retry_raw_transcript: retrySnapshot.retryRawTranscript,
+            retry_display_transcript: retrySnapshot.retryDisplayTranscript,
           })
         : undefined;
     const polish = polishResult ? toPolishViewModel(polishResult) : undefined;
     const retryFeedback = retryFeedbackResult
       ? toRetryFeedbackViewModel(
           retryFeedbackResult,
-          createMarkedRetryTranscript(
-            answerText,
-            firstAnswer?.text ?? "",
-            firstAnswer?.polish?.polishedAnswer ?? "",
-            firstAnswer?.polish?.expansionSentence ?? "",
-          ),
-        )
-      : undefined;
+           createMarkedRetryTranscript(
+             displayTranscript,
+             firstAnswer?.displayTranscript ??
+               firstAnswer?.cleanedTranscript ??
+               firstAnswer?.text ??
+               "",
+             retrySnapshot?.polishedAnswer ?? "",
+             retrySnapshot?.extensionSentence ?? "",
+           ),
+         )
+       : undefined;
     const hasPolishOutput = Boolean(
       polish?.polishedAnswer || polish?.noPolishNeeded,
     );
 
     if (answerLength < 3) {
-      trackPracticeEvent("answer_too_short_detected", currentQuestionIndex, {
-        answer_text: answerText,
+      trackPracticeEvent("answer_too_short_detected", questionIndexSnapshot, {
+        answer_text: cleanedTranscript,
         answer_length: answerLength,
       });
     }
@@ -1758,7 +2030,7 @@ function getAudioFileExtension(mimeType: string) {
       kind === "first" &&
       (!hasPolishOutput || polishResult?.fallback_used)
     ) {
-      trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
+      trackPracticeEvent("ai_generation_failed", questionIndexSnapshot, {
         ai_node: "polish",
         ai_provider: polishResult?.ai_provider,
         ai_source: polishResult?.ai_source ?? "mock_fallback",
@@ -1778,7 +2050,7 @@ function getAudioFileExtension(mimeType: string) {
     }
 
     if (kind === "retry" && retryFeedbackResult?.fallback_used) {
-      trackPracticeEvent("ai_generation_failed", currentQuestionIndex, {
+      trackPracticeEvent("ai_generation_failed", questionIndexSnapshot, {
         ai_node: "retry_feedback",
         ai_provider: retryFeedbackResult.ai_provider,
         ai_source: retryFeedbackResult.ai_source,
@@ -1812,12 +2084,12 @@ function getAudioFileExtension(mimeType: string) {
 
     if (
       kind === "first" &&
-      !trackedRef.current.answerSubmitted.has(currentQuestionIndex)
+      !trackedRef.current.answerSubmitted.has(questionIndexSnapshot)
     ) {
-      trackedRef.current.answerSubmitted.add(currentQuestionIndex);
-      trackPracticeEvent("answer_submitted", currentQuestionIndex, {
+      trackedRef.current.answerSubmitted.add(questionIndexSnapshot);
+      trackPracticeEvent("answer_submitted", questionIndexSnapshot, {
         ai_node: "A05_ASR_TRANSCRIPTION",
-        answer_text: answerText,
+        answer_text: cleanedTranscript,
         answer_length: answerLength,
         fallback_reason: submissionMeta.fallbackReason,
         fallback_mode: submissionMeta.fallbackMode,
@@ -1831,6 +2103,7 @@ function getAudioFileExtension(mimeType: string) {
         asr_status: submissionMeta.asrStatus,
         raw_transcript: submissionMeta.rawTranscript,
         cleaned_transcript: submissionMeta.cleanedTranscript,
+        display_transcript: displayTranscript,
         has_valid_speech: submissionMeta.hasValidSpeech,
         failure_type: submissionMeta.failureType,
         audio_mime_type: submissionMeta.audioMimeType,
@@ -1844,10 +2117,10 @@ function getAudioFileExtension(mimeType: string) {
       kind === "first" &&
       polish &&
       hasPolishOutput &&
-      !trackedRef.current.polishGenerated.has(currentQuestionIndex)
+      !trackedRef.current.polishGenerated.has(questionIndexSnapshot)
     ) {
-      trackedRef.current.polishGenerated.add(currentQuestionIndex);
-      trackPracticeEvent("polish_generated", currentQuestionIndex, {
+      trackedRef.current.polishGenerated.add(questionIndexSnapshot);
+      trackPracticeEvent("polish_generated", questionIndexSnapshot, {
         ai_success: polish.aiSuccess,
         ai_node: "polish",
         ai_provider: polish.aiProvider,
@@ -1870,10 +2143,10 @@ function getAudioFileExtension(mimeType: string) {
     if (
       kind === "retry" &&
       retryFeedback &&
-      !trackedRef.current.retryAnswerSubmitted.has(currentQuestionIndex)
+      !trackedRef.current.retryAnswerSubmitted.has(questionIndexSnapshot)
     ) {
-      trackedRef.current.retryAnswerSubmitted.add(currentQuestionIndex);
-      trackPracticeEvent("retry_feedback_generated", currentQuestionIndex, {
+      trackedRef.current.retryAnswerSubmitted.add(questionIndexSnapshot);
+      trackPracticeEvent("retry_feedback_generated", questionIndexSnapshot, {
         ai_node: "retry_feedback",
         ai_provider: retryFeedback.aiProvider,
         ai_source: retryFeedback.aiSource,
@@ -1882,7 +2155,7 @@ function getAudioFileExtension(mimeType: string) {
         llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
         retry_feedback_type: retryFeedback.type,
       });
-      trackPracticeEvent("retry_answer_submitted", currentQuestionIndex, {
+      trackPracticeEvent("retry_answer_submitted", questionIndexSnapshot, {
         ai_node: "A05_ASR_TRANSCRIPTION",
         retry_ai_node: "retry_feedback",
         retry_ai_provider: retryFeedback.aiProvider,
@@ -1902,13 +2175,14 @@ function getAudioFileExtension(mimeType: string) {
         asr_status: submissionMeta.asrStatus,
         raw_transcript: submissionMeta.rawTranscript,
         cleaned_transcript: submissionMeta.cleanedTranscript,
+        display_transcript: displayTranscript,
         has_valid_speech: submissionMeta.hasValidSpeech,
         failure_type: submissionMeta.failureType,
         audio_mime_type: submissionMeta.audioMimeType,
         audio_duration_seconds: submissionMeta.recordedSeconds,
         recording_duration_seconds: submissionMeta.recordedSeconds,
         transcript_source: submissionMeta.transcriptSource,
-        retry_answer_text: answerText,
+        retry_answer_text: cleanedTranscript,
         retry_feedback_type: retryFeedback.type,
       });
     }
@@ -1945,6 +2219,7 @@ function getAudioFileExtension(mimeType: string) {
         asr_status: asrResult.asrStatus,
         raw_transcript: asrResult.rawTranscript,
         cleaned_transcript: asrResult.cleanedTranscript,
+        display_transcript: asrResult.displayTranscript,
         has_valid_speech: false,
         failure_type: asrResult.failureType,
         fallback_reason: asrResult.fallbackReason ?? null,
@@ -1987,6 +2262,7 @@ function getAudioFileExtension(mimeType: string) {
       asrStatus: asrResult.asrStatus,
       rawTranscript: asrResult.rawTranscript,
       cleanedTranscript: asrResult.cleanedTranscript,
+      displayTranscript: asrResult.displayTranscript,
       hasValidSpeech: asrResult.hasValidSpeech,
       failureType: null,
     });
@@ -2034,6 +2310,7 @@ function getAudioFileExtension(mimeType: string) {
         asrStatus: "skipped_for_debug_text",
         rawTranscript: answerText,
         cleanedTranscript: answerText,
+        displayTranscript: answerText,
         hasValidSpeech: true,
         failureType: null,
       });
@@ -2224,7 +2501,7 @@ function getAudioFileExtension(mimeType: string) {
         ? answer.retryFeedback.markedRetryTranscript
         : answer.kind === "first" && answer.polish?.markedTranscript
         ? answer.polish.markedTranscript
-        : [{ text: answer.text, type: "normal" as const }];
+        : [{ text: answer.displayTranscript || answer.text, type: "normal" as const }];
     const hasAdoptedSegment =
       isRetryAnswer &&
       answer.retryFeedback?.markedRetryTranscript.some(

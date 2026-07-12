@@ -2,9 +2,19 @@ import {
   createMockPreAnswerOutput,
   createMockPolishResult,
   createMockRetryFeedbackResult,
+  createAiRetryJudgement,
+  diagnoseAiPolishInput,
+  hasAiSubstantiveDifference,
+  hasAiTimeStateConflict,
+  hasAiUnsafeExtension,
+  mapAiRetryJudgementToFeedback,
   type ApiPreAnswerResponse,
+  type ApiPolishSegment,
   type ApiPolishResponse,
   type ApiRetryFeedbackResponse,
+  type A04AdoptionState,
+  type A04Judgement,
+  type PolishInputDiagnosis,
   type MarkedTranscriptSegment,
   type PreAnswerInput,
   type PolishInput,
@@ -42,6 +52,14 @@ type SchemaValidationIssue = {
     | "string_too_long"
     | "forbidden_value";
   detail?: string;
+};
+
+type FinalizePolishInput = {
+  input: PolishInput;
+  response: ApiPolishResponse;
+  source: ApiPolishResponse["source"];
+  fallbackReason: FallbackReason | null;
+  diagnosis?: PolishInputDiagnosis;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_URL =
@@ -412,6 +430,19 @@ export function createPolishFallbackResponse(
   fallbackReason: FallbackReason,
   llmLatencyMs: number | null,
 ): ApiPolishResponse {
+  return finalizePolishResponse({
+    input,
+    response: createRawPolishFallbackResponse(input, fallbackReason, llmLatencyMs),
+    source: "mock_fallback",
+    fallbackReason,
+  });
+}
+
+function createRawPolishFallbackResponse(
+  input: PolishInput,
+  fallbackReason: FallbackReason,
+  llmLatencyMs: number | null,
+): ApiPolishResponse {
   const mockResult = createMockPolishResult(input);
 
   return {
@@ -747,6 +778,147 @@ function isMetaOrNoAnswerExpression(answer: string) {
   );
 }
 
+function countComparableWords(text: string) {
+  return normalizeComparableAnswer(text).split(/\s+/).filter(Boolean).length;
+}
+
+function hasFixableLanguageIssue(answer: string) {
+  return [
+    /\bvery like\b/i,
+    /\blike wear\b/i,
+    /\b(they|we|you)\s+is\b/i,
+    /\bi\s+is\b/i,
+    /\bit\s+make\s+me\b/i,
+    /\bmake\s+me\s+relax\b/i,
+    /\bfeel\s+relax\b/i,
+    /\bmore better\b/i,
+    /\bclothes very comfortable\b/i,
+    /\b\w+\.\s+(?:a|an|very|beautiful|comfortable|convenient)\b/i,
+  ].some((pattern) => pattern.test(answer));
+}
+
+function isLikelyLowConfidenceTranscript(answer: string) {
+  const normalized = normalizeComparableAnswer(answer);
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  if (!normalized) {
+    return true;
+  }
+
+  if (words.length <= 1 && !/^(yes|no|yeah|nope|\d{1,2})$/.test(normalized)) {
+    return true;
+  }
+
+  return /\b(?:noise|music|inaudible|silence|cough|laugh)\b/i.test(answer);
+}
+
+function getPolishIntent(questionText: string, answerStructureType?: AnswerStructureType) {
+  const question = questionText.toLowerCase();
+
+  if (/\bhow old\b/.test(question)) {
+    return "age";
+  }
+
+  if (/\bwhere do you live|where are you from|hometown|city|town|village|house or an apartment\b/.test(question)) {
+    return "place";
+  }
+
+  if (/\bwhen did you|when do you\b/.test(question) || answerStructureType === "past_present_compare") {
+    return "time";
+  }
+
+  if (/\bhow often|do you often|usually\b/.test(question) || answerStructureType === "frequency_situation") {
+    return "frequency";
+  }
+
+  if (/^(do|did|have|are|is|was|were|can|would|will)\b/i.test(question)) {
+    return "yes_no";
+  }
+
+  if (answerStructureType === "place_description") {
+    return "description";
+  }
+
+  return "open";
+}
+
+function isCoreShortAnswer(input: PolishInput) {
+  const answer = normalizeComparableAnswer(input.user_answer);
+  const intent = getPolishIntent(input.question_text, input.answerStructureType);
+
+  if (!answer || countComparableWords(answer) > 8) {
+    return false;
+  }
+
+  if (intent === "age") {
+    return /\b\d{1,2}\b|\byears?\s+old\b|\b(twenty|thirty|forty|fifty|sixty)\b/.test(answer);
+  }
+
+  if (intent === "place") {
+    return /\b(i live|live in|from|hometown|city|town|village|here|there|now)\b/.test(answer) || countComparableWords(answer) <= 2;
+  }
+
+  if (intent === "time") {
+    return /\b(ago|last|since|yesterday|today|year|month|week|day|before|past)\b/.test(answer);
+  }
+
+  if (intent === "frequency") {
+    return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|daily|weekly|monthly)\b/.test(answer);
+  }
+
+  if (intent === "yes_no") {
+    return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
+  }
+
+  return false;
+}
+
+function diagnosePolishInput(input: PolishInput): PolishInputDiagnosis {
+  if (isMetaOrNoAnswerExpression(input.user_answer)) {
+    return "meta_or_no_answer";
+  }
+
+  if (isLikelyLowConfidenceTranscript(input.user_answer)) {
+    return "low_confidence_transcript";
+  }
+
+  if (hasFixableLanguageIssue(input.user_answer)) {
+    return "fixable_language_issue";
+  }
+
+  if (isCoreShortAnswer(input) || countComparableWords(input.user_answer) < 8) {
+    return "correct_but_short";
+  }
+
+  return "natural_complete";
+}
+
+function hasSubstantiveDifference(left: string, right: string) {
+  return normalizeComparableAnswer(left) !== normalizeComparableAnswer(right);
+}
+
+function createSafePolishForFixableIssue(input: PolishInput) {
+  let text = input.user_answer.trim();
+
+  text = text
+    .replace(/\bvery like\b/gi, "really like")
+    .replace(/\blike wear\b/gi, "like wearing")
+    .replace(/\bthey is\b/gi, "they are")
+    .replace(/\bwe is\b/gi, "we are")
+    .replace(/\byou is\b/gi, "you are")
+    .replace(/\bi is\b/gi, "I am")
+    .replace(/\bit make me\b/gi, "it makes me")
+    .replace(/\bmake me relax\b/gi, "makes me relaxed")
+    .replace(/\bfeel relax\b/gi, "feel relaxed")
+    .replace(/\bmore better\b/gi, "better");
+
+  if (!/[.!?]$/.test(text)) {
+    text = `${text}.`;
+  }
+
+  return text;
+}
+
 function containsUnprovidedSpecificFact(outputText: string, userAnswer: string) {
   const normalizedOutput = normalizeComparableAnswer(outputText);
   const normalizedUserAnswer = normalizeComparableAnswer(userAnswer);
@@ -794,6 +966,123 @@ function containsUnsafeShortAnswerExtension(
   });
 }
 
+function containsUnsafeExtension(extensionSentence: string, input: PolishInput) {
+  const extension = normalizeComparableAnswer(extensionSentence);
+  const answer = normalizeComparableAnswer(input.user_answer);
+  const intent = getPolishIntent(input.question_text, input.answerStructureType);
+
+  if (!extension) {
+    return false;
+  }
+
+  if (containsUnsafeShortAnswerExtension(extensionSentence, input.user_answer)) {
+    return true;
+  }
+
+  const sensitivePatterns = [
+    /\b(?:for|since)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|many|several)\s+(?:years?|months?|weeks?|days?)\b/,
+    /\b(?:used to|before|in the past|when i was|previously|moved|lived there|lived here)\b/,
+    /\b(?:school|university|college|campus|class|teacher|student|major)\b/,
+    /\b(?:work|working|job|company|office|colleague|career)\b/,
+    /\b(?:wechat|weibo|instagram|facebook|tiktok|twitter|snapchat|youtube)\b/,
+    /\b(?:because my|because i have|because i can|so i can|in order to)\b/,
+    /\b(?:for example|once|i remember|experience|experienced)\b/,
+    /\b(?:history|historical|culture|cultural|famous|tourist|ancient)\b/,
+    /\b(?:family|parents|friends|background)\b/,
+    /\b(?:ago|last year|yesterday|currently|at the moment|now|usually|often|every day)\b/,
+  ];
+
+  if (
+    (intent === "age" || intent === "place" || intent === "time") &&
+    sensitivePatterns.some((pattern) => {
+      const match = extension.match(pattern)?.[0];
+      return Boolean(match && !answer.includes(match));
+    })
+  ) {
+    return true;
+  }
+
+  if (hasAiTimeStateConflict(extension, answer)) {
+    return true;
+  }
+
+  if (containsDeniedSelfCorrectionFact(extension, input.user_answer)) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasUnsafePolishedFactChange(polishedAnswer: string, input: PolishInput) {
+  const polished = normalizeComparableAnswer(polishedAnswer);
+  const answer = normalizeComparableAnswer(input.user_answer);
+  const intent = getPolishIntent(input.question_text, input.answerStructureType);
+
+  if (!polished) {
+    return true;
+  }
+
+  if (hasAiTimeStateConflict(polished, answer)) {
+    return true;
+  }
+
+  if (containsDeniedSelfCorrectionFact(polished, input.user_answer)) {
+    return true;
+  }
+
+  if (intent === "age" && /\b(?:live|city|school|work|job|years? in|for \d+ years?)\b/.test(polished) && !/\b(?:live|city|school|work|job|years? in|for \d+ years?)\b/.test(answer)) {
+    return true;
+  }
+
+  if (intent === "place" && /\b(?:used to|before|in the past|history|culture|family|for \d+ years?|since)\b/.test(polished) && !/\b(?:used to|before|in the past|history|culture|family|for \d+ years?|since)\b/.test(answer)) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasTimeStateConflict(outputText: string, userAnswer: string) {
+  const output = normalizeComparableAnswer(outputText);
+  const answer = normalizeComparableAnswer(userAnswer);
+  const userHasPresent = /\b(now|currently|at the moment)\b/.test(answer);
+  const userHasPast = /\b(used to|before|in the past|ago|last year|yesterday)\b/.test(answer);
+  const userHasDuration = /\b(since|for)\b/.test(answer);
+  const outputHasPresent = /\b(now|currently|at the moment|usually|often|every day)\b/.test(output);
+  const outputHasPast = /\b(used to|before|in the past|ago|last year|yesterday)\b/.test(output);
+  const outputHasDuration = /\b(since|for)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|many|several)\s+(?:years?|months?|weeks?|days?)\b/.test(output);
+
+  if (userHasPresent && outputHasPast && !userHasPast) {
+    return true;
+  }
+
+  if (userHasPast && outputHasPresent && !userHasPresent) {
+    return true;
+  }
+
+  if (outputHasDuration && !userHasDuration) {
+    return true;
+  }
+
+  return false;
+}
+
+function containsDeniedSelfCorrectionFact(outputText: string, rawAnswer: string) {
+  const correctionMatch = rawAnswer.match(
+    /\b(.+?)\b(?:sorry|no|actually)\s*,?\s*(?:i mean|what i mean is|i meant)?\s+(.+)/i,
+  );
+
+  if (!correctionMatch) {
+    return false;
+  }
+
+  const deniedWords = normalizeComparableAnswer(correctionMatch[1])
+    .split(/\s+/)
+    .filter((word) => word.length > 3 && !["live", "from", "mean"].includes(word));
+  const output = normalizeComparableAnswer(outputText);
+
+  return deniedWords.some((word) => output.includes(word));
+}
+
 function createSafeNoAnswerPolishResponse(input: PolishInput): ApiPolishResponse {
   return {
     originalSegments: [
@@ -803,10 +1092,9 @@ function createSafeNoAnswerPolishResponse(input: PolishInput): ApiPolishResponse
         reason: "This does not answer the question yet.",
       },
     ],
-    polishedAnswer:
-      "You haven't really answered the question yet. Start with a direct answer, then add one simple reason or detail.",
+    polishedAnswer: input.user_answer.trim(),
     extensionSentence: "Answer directly first, then add one short reason or detail.",
-    hasMeaningfulPolish: true,
+    hasMeaningfulPolish: false,
     source: "llm",
     aiProvider: getAiProvider(),
     fallbackReason: null,
@@ -840,10 +1128,51 @@ function lowercaseInitial(text: string) {
   return text ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
 }
 
-function postprocessPolishResponse(
-  input: PolishInput,
-  result: ApiPolishResponse,
-): ApiPolishResponse {
+function finalizePolishResponse({
+  input,
+  response,
+  source,
+  fallbackReason,
+  diagnosis = diagnoseAiPolishInput(input),
+}: FinalizePolishInput): ApiPolishResponse {
+  const result: ApiPolishResponse = {
+    originalSegments: normalizePolishSegments(response.originalSegments, input),
+    polishedAnswer: response.polishedAnswer.trim() || input.user_answer.trim(),
+    extensionSentence: normalizeOptionalString(response.extensionSentence),
+    hasMeaningfulPolish: Boolean(response.hasMeaningfulPolish),
+    source,
+    aiProvider: response.aiProvider ?? getAiProvider(),
+    fallbackReason,
+    llmLatencyMs: response.llmLatencyMs,
+  };
+
+  if (diagnosis === "low_confidence_transcript") {
+    return {
+      ...result,
+      originalSegments: [
+        {
+          text: input.user_answer,
+          markType: "orange",
+          reason: "The transcript is not reliable enough to polish safely.",
+        },
+      ],
+      polishedAnswer: input.user_answer.trim(),
+      extensionSentence:
+        "Please record it again so I can polish it safely.",
+      hasMeaningfulPolish: false,
+    };
+  }
+
+  if (diagnosis === "meta_or_no_answer") {
+    return {
+      ...createSafeNoAnswerPolishResponse(input),
+      source,
+      aiProvider: result.aiProvider,
+      fallbackReason,
+      llmLatencyMs: result.llmLatencyMs,
+    };
+  }
+
   if (isTimeOnlyStartAnswer(input)) {
     const startedAction = getStartedActionFromQuestion(input.question_text);
 
@@ -858,21 +1187,47 @@ function postprocessPolishResponse(
     result.extensionSentence = "";
   }
 
-  if (
-    normalizeComparableAnswer(result.polishedAnswer) ===
-      normalizeComparableAnswer(input.user_answer) &&
-    result.originalSegments.every((segment) => segment.markType === "none")
-  ) {
+  const hasMeaningfulPolish = hasAiSubstantiveDifference(
+    result.polishedAnswer,
+    input.user_answer,
+  );
+
+  if (!hasMeaningfulPolish) {
     result.hasMeaningfulPolish = false;
 
-    if (
-      containsUnsafeShortAnswerExtension(
-        result.extensionSentence,
+    if (diagnosis === "fixable_language_issue") {
+      result.polishedAnswer = createSafePolishForFixableIssue(input);
+      result.hasMeaningfulPolish = hasAiSubstantiveDifference(
+        result.polishedAnswer,
         input.user_answer,
-      )
-    ) {
-      result.extensionSentence = "";
+      );
+      result.originalSegments = [
+        {
+          text: input.user_answer,
+          markType: "orange",
+          reason: "This can be made more natural.",
+        },
+      ];
     }
+  } else if (diagnosis === "natural_complete") {
+    result.polishedAnswer = input.user_answer.trim();
+    result.hasMeaningfulPolish = false;
+  }
+
+  if (hasAiUnsafeExtension(result.extensionSentence, input)) {
+    result.extensionSentence = "";
+  }
+
+  if (hasUnsafePolishedFactChange(result.polishedAnswer, input)) {
+    const safePolishedAnswer =
+      diagnosis === "fixable_language_issue"
+        ? createSafePolishForFixableIssue(input)
+        : input.user_answer.trim();
+
+    result.polishedAnswer = safePolishedAnswer;
+    result.hasMeaningfulPolish =
+      diagnosis === "fixable_language_issue" &&
+      hasAiSubstantiveDifference(safePolishedAnswer, input.user_answer);
   }
 
   if (
@@ -882,10 +1237,39 @@ function postprocessPolishResponse(
       input.user_answer,
     )
   ) {
-    return createSafeNoAnswerPolishResponse(input);
+    return {
+      ...createSafeNoAnswerPolishResponse(input),
+      source,
+      aiProvider: result.aiProvider,
+      fallbackReason,
+      llmLatencyMs: result.llmLatencyMs,
+    };
   }
 
   return result;
+}
+
+function normalizePolishSegments(
+  segments: ApiPolishSegment[],
+  input: PolishInput,
+): ApiPolishSegment[] {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return [{ text: input.user_answer, markType: "none", reason: "" }];
+  }
+
+  const normalizedSegments = segments
+    .filter((segment) => segment && segment.text.trim())
+    .map((segment) => ({
+      text: segment.text.trim(),
+      markType: ["none", "red", "orange"].includes(segment.markType)
+        ? segment.markType
+        : "none",
+      reason: segment.reason.trim(),
+    }));
+
+  return normalizedSegments.length > 0
+    ? normalizedSegments
+    : [{ text: input.user_answer, markType: "none", reason: "" }];
 }
 
 function diagnosePolishSchema(value: unknown): SchemaValidationIssue[] {
@@ -980,8 +1364,10 @@ export async function generatePolishWithLlm(
 ): Promise<ApiPolishResponse> {
   const llmResult = await callLlmJson(POLISH_SYSTEM_PROMPT, {
     topicId: input.topic_id,
+    questionId: input.question_id,
+    questionIndex: input.question_index,
     questionText: input.question_text,
-    userTranscript: input.user_answer,
+    userTranscript: input.cleaned_transcript ?? input.user_answer,
     answerStructureType: input.answerStructureType,
   });
 
@@ -1000,7 +1386,12 @@ export async function generatePolishWithLlm(
     );
 
     if (repairAttempt.data) {
-      const processed = postprocessPolishResponse(input, repairAttempt.data);
+      const processed = finalizePolishResponse({
+        input,
+        response: repairAttempt.data,
+        source: "llm",
+        fallbackReason: null,
+      });
 
       return {
         ...processed,
@@ -1017,7 +1408,12 @@ export async function generatePolishWithLlm(
   }
 
   return {
-    ...postprocessPolishResponse(input, validated),
+    ...finalizePolishResponse({
+      input,
+      response: validated,
+      source: "llm",
+      fallbackReason: null,
+    }),
     aiProvider: llmResult.provider,
     llmLatencyMs: llmResult.latencyMs,
   };
@@ -1051,8 +1447,7 @@ export function createRetryFeedbackFallbackResponse(
   llmLatencyMs: number | null,
 ): ApiRetryFeedbackResponse {
   const mockResult = createMockRetryFeedbackResult(input);
-
-  return {
+  const rawResponse: ApiRetryFeedbackResponse = {
     feedbackType: mapRetryFeedbackToApi(mockResult),
     feedbackText: mockResult.feedback_text,
     adoptedExpressions:
@@ -1065,6 +1460,247 @@ export function createRetryFeedbackFallbackResponse(
     fallbackReason,
     llmLatencyMs,
   };
+
+  return finalizeRetryFeedbackResponse(input, rawResponse, "mock_fallback", fallbackReason);
+}
+
+function finalizeRetryFeedbackResponse(
+  input: RetryFeedbackInput,
+  response: ApiRetryFeedbackResponse,
+  source: ApiRetryFeedbackResponse["source"],
+  fallbackReason: FallbackReason | null,
+): ApiRetryFeedbackResponse {
+  const judgement = createAiRetryJudgement(input);
+  const mapped = mapAiRetryJudgementToFeedback(judgement);
+
+  return {
+    feedbackType: mapped.feedbackType,
+    feedbackText: mapped.feedbackText || response.feedbackText,
+    adoptedExpressions:
+      mapped.feedbackType === "adopted_suggestion"
+        ? response.adoptedExpressions
+        : [],
+    source,
+    aiProvider: response.aiProvider ?? getAiProvider(),
+    fallbackReason,
+    llmLatencyMs: response.llmLatencyMs,
+  };
+}
+
+function createA04Judgement(input: RetryFeedbackInput): A04Judgement {
+  const first = input.first_cleaned_transcript ?? input.first_answer;
+  const retry = input.retry_cleaned_transcript ?? input.retry_answer;
+  const answeredCoreQuestion = isCoreAnswerForQuestion(
+    input.question_text,
+    input.answerStructureType,
+    retry,
+  );
+  const repeatedOriginal = isComparableSame(first, retry);
+  const adoptedSuggestion = getA04AdoptionState(input, retry);
+  const introducedNewError = hasRetryGrammarIssue(retry) && !hasRetryGrammarIssue(first);
+  const containsOffTopicPart =
+    answeredCoreQuestion &&
+    hasOffTopicTail(input.question_text, input.answerStructureType, retry);
+  const firstAnsweredCore = isCoreAnswerForQuestion(
+    input.question_text,
+    input.answerStructureType,
+    first,
+  );
+
+  return {
+    answeredCoreQuestion,
+    preservedOriginalMeaning: answeredCoreQuestion || !firstAnsweredCore,
+    adoptedSuggestion,
+    independentlyImproved:
+      answeredCoreQuestion &&
+      !repeatedOriginal &&
+      adoptedSuggestion === "none" &&
+      (countComparableWords(retry) > countComparableWords(first) ||
+        sharedComparableWordCount(first, retry) >= 2),
+    repeatedOriginal,
+    introducedNewError,
+    containsOffTopicPart,
+    regressed: firstAnsweredCore && !answeredCoreQuestion,
+  };
+}
+
+function mapA04JudgementToFeedback(judgement: A04Judgement): {
+  feedbackType: ApiRetryFeedbackResponse["feedbackType"];
+  feedbackText: string;
+} {
+  if (judgement.answeredCoreQuestion && judgement.containsOffTopicPart) {
+    return {
+      feedbackType: "needs_adjustment",
+      feedbackText:
+        "前半句已经回答了题目，后面的内容和问题关系不大，可以删掉或换成更相关的补充~",
+    };
+  }
+
+  if (
+    !judgement.answeredCoreQuestion ||
+    judgement.repeatedOriginal ||
+    judgement.regressed ||
+    judgement.introducedNewError
+  ) {
+    return {
+      feedbackType: "needs_adjustment",
+      feedbackText: judgement.repeatedOriginal
+        ? "这次和第一次回答基本一样，可以试着加入上次的一句润色或扩展内容~"
+        : "这次还需要再调整一下，先直接回答题目，再补一个相关细节~",
+    };
+  }
+
+  if (judgement.adoptedSuggestion !== "none") {
+    return {
+      feedbackType: "adopted_suggestion",
+      feedbackText: "已经把建议用进回答了，很棒！",
+    };
+  }
+
+  if (judgement.independentlyImproved) {
+    return {
+      feedbackType: "improved_expression",
+      feedbackText: "这次回答更完整了，可以继续保持这个方向~",
+    };
+  }
+
+  return {
+    feedbackType: "improved_expression",
+    feedbackText: "这次回答是有效的，可以再加入一个更具体的相关细节~",
+  };
+}
+
+function isCoreAnswerForQuestion(
+  questionText: string,
+  answerStructureType: AnswerStructureType | undefined,
+  answerText: string,
+) {
+  const answer = normalizeComparableAnswer(answerText);
+  const intent = getPolishIntent(questionText, answerStructureType);
+
+  if (!answer || isMetaOrNoAnswerExpression(answerText)) {
+    return false;
+  }
+
+  if (intent === "age") {
+    return /\b\d{1,2}\b|\byears?\s+old\b|\b(twenty|thirty|forty|fifty|sixty)\b/.test(answer);
+  }
+
+  if (intent === "place") {
+    return /\b(i live|live in|from|hometown|city|town|village|here|there|now)\b/.test(answer) || countComparableWords(answer) <= 3;
+  }
+
+  if (intent === "time") {
+    return /\b(ago|last|since|yesterday|today|year|month|week|day|started|before|past)\b/.test(answer);
+  }
+
+  if (intent === "frequency") {
+    return /\b(always|usually|often|sometimes|rarely|never|every|once|twice|daily|weekly|monthly)\b/.test(answer);
+  }
+
+  if (intent === "yes_no") {
+    return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
+  }
+
+  return countComparableWords(answer) >= 3;
+}
+
+function hasOffTopicTail(
+  questionText: string,
+  answerStructureType: AnswerStructureType | undefined,
+  retryAnswer: string,
+) {
+  const intent = getPolishIntent(questionText, answerStructureType);
+  const answer = normalizeComparableAnswer(retryAnswer);
+
+  if (intent === "age") {
+    return /\b(live|lived|city|hometown|school|work|job|for \d+ years?|since)\b/.test(answer);
+  }
+
+  if (intent === "place") {
+    return /\b(age|years old|work as|study major)\b/.test(answer);
+  }
+
+  return false;
+}
+
+function getA04AdoptionState(
+  input: RetryFeedbackInput,
+  retryAnswer: string,
+): A04AdoptionState {
+  const retry = normalizeComparableAnswer(retryAnswer);
+  const polished = normalizeComparableAnswer(input.polished_answer);
+  const extension = normalizeComparableAnswer(input.expansion_sentence ?? "");
+  const suggestion = normalizeComparableAnswer(
+    `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
+  );
+
+  if (extension && extension.length >= 12 && retry.includes(extension)) {
+    return "full";
+  }
+
+  if (polished && polished.length >= 12 && retry.includes(polished)) {
+    return "full";
+  }
+
+  if (suggestion && sharedComparableWordCount(suggestion, retry) >= 4) {
+    return "partial";
+  }
+
+  if (suggestion && sharedComparableWordCount(suggestion, retry) >= 3) {
+    return "synonym";
+  }
+
+  return "none";
+}
+
+function isComparableSame(first: string, retry: string) {
+  const normalizedFirst = normalizeComparableAnswer(first);
+  const normalizedRetry = normalizeComparableAnswer(retry);
+
+  return (
+    Boolean(normalizedFirst && normalizedRetry) &&
+    normalizedFirst === normalizedRetry
+  );
+}
+
+function hasRetryGrammarIssue(answer: string) {
+  return /\b(they|we|you)\s+is\b|\bi\s+is\b|\bit\s+make\s+me\b|\bfeel\s+relax\b/i.test(
+    answer,
+  );
+}
+
+function sharedComparableWordCount(left: string, right: string) {
+  const stopWords = new Set([
+    "i",
+    "it",
+    "is",
+    "am",
+    "are",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "to",
+    "in",
+    "of",
+    "for",
+    "with",
+    "my",
+    "me",
+    "this",
+    "that",
+  ]);
+  const leftWords = new Set(
+    normalizeComparableAnswer(left)
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !stopWords.has(word)),
+  );
+
+  return normalizeComparableAnswer(right)
+    .split(/\s+/)
+    .filter((word) => leftWords.has(word) && !stopWords.has(word)).length;
 }
 
 export function validateRetryFeedbackApiResponse(
@@ -1102,11 +1738,14 @@ export async function generateRetryFeedbackWithLlm(
   input: RetryFeedbackInput,
 ): Promise<ApiRetryFeedbackResponse> {
   const llmResult = await callLlmJson(RETRY_FEEDBACK_SYSTEM_PROMPT, {
+    topicId: input.topic_id,
+    questionId: input.question_id,
+    questionIndex: input.question_index,
     questionText: input.question_text,
-    firstTranscript: input.first_answer,
+    firstTranscript: input.first_cleaned_transcript ?? input.first_answer,
     polishedAnswer: input.polished_answer,
     extensionSentence: input.expansion_sentence ?? "",
-    retryTranscript: input.retry_answer,
+    retryTranscript: input.retry_cleaned_transcript ?? input.retry_answer,
   });
 
   if (!llmResult.ok) {
@@ -1123,11 +1762,16 @@ export async function generateRetryFeedbackWithLlm(
     return createRetryFeedbackFallbackResponse(input, "schema_invalid", llmResult.latencyMs);
   }
 
-  return {
-    ...validated,
-    aiProvider: llmResult.provider,
-    llmLatencyMs: llmResult.latencyMs,
-  };
+  return finalizeRetryFeedbackResponse(
+    input,
+    {
+      ...validated,
+      aiProvider: llmResult.provider,
+      llmLatencyMs: llmResult.latencyMs,
+    },
+    "llm",
+    null,
+  );
 }
 
 export function parsePolishRequestBody(body: unknown): PolishInput | null {
@@ -1135,22 +1779,36 @@ export function parsePolishRequestBody(body: unknown): PolishInput | null {
     return null;
   }
 
+  const cleanedTranscript = normalizeOptionalString(
+    body.cleanedTranscript ?? body.userTranscript,
+  );
+  const questionIndex =
+    typeof body.questionIndex === "number"
+      ? body.questionIndex
+      : Number(body.questionIndex);
+
   if (
     !isNonEmptyString(body.topicId) ||
+    !isNonEmptyString(body.questionId) ||
     !isNonEmptyString(body.questionText) ||
-    !isNonEmptyString(body.userTranscript) ||
-    !isNonEmptyString(body.answerStructureType)
+    !isNonEmptyString(cleanedTranscript) ||
+    !isNonEmptyString(body.answerStructureType) ||
+    !Number.isFinite(questionIndex)
   ) {
     return null;
   }
 
   return {
     topic_id: body.topicId,
+    question_id: body.questionId,
     topic_title: "",
     question_text: body.questionText,
     answerStructureType: body.answerStructureType as AnswerStructureType,
-    user_answer: body.userTranscript,
-    question_index: 1,
+    user_answer: cleanedTranscript,
+    raw_transcript: normalizeOptionalString(body.rawTranscript),
+    cleaned_transcript: cleanedTranscript,
+    display_transcript: normalizeOptionalString(body.displayTranscript),
+    question_index: questionIndex,
     target_level: "IELTS 6.0-6.5",
   };
 }
@@ -1184,20 +1842,44 @@ export function parseRetryFeedbackRequestBody(
     return null;
   }
 
+  const firstCleanedTranscript = normalizeOptionalString(
+    body.firstCleanedTranscript ?? body.firstTranscript,
+  );
+  const retryCleanedTranscript = normalizeOptionalString(
+    body.retryCleanedTranscript ?? body.retryTranscript,
+  );
+  const questionIndex =
+    typeof body.questionIndex === "number"
+      ? body.questionIndex
+      : Number(body.questionIndex);
+
   if (
+    !isNonEmptyString(body.topicId) ||
+    !isNonEmptyString(body.questionId) ||
     !isNonEmptyString(body.questionText) ||
-    !isNonEmptyString(body.firstTranscript) ||
-    !isNonEmptyString(body.retryTranscript)
+    !isNonEmptyString(firstCleanedTranscript) ||
+    !isNonEmptyString(retryCleanedTranscript) ||
+    !Number.isFinite(questionIndex)
   ) {
     return null;
   }
 
   return {
+    topic_id: body.topicId,
+    question_id: body.questionId,
+    question_index: questionIndex,
+    answerStructureType: isNonEmptyString(body.answerStructureType)
+      ? (body.answerStructureType as AnswerStructureType)
+      : undefined,
     question_text: body.questionText,
-    first_answer: body.firstTranscript,
+    first_answer: firstCleanedTranscript,
+    first_cleaned_transcript: firstCleanedTranscript,
     polished_answer: normalizeOptionalString(body.polishedAnswer),
     expansion_sentence: normalizeOptionalString(body.extensionSentence),
-    retry_answer: body.retryTranscript,
+    retry_answer: retryCleanedTranscript,
+    retry_cleaned_transcript: retryCleanedTranscript,
+    retry_raw_transcript: normalizeOptionalString(body.retryRawTranscript),
+    retry_display_transcript: normalizeOptionalString(body.retryDisplayTranscript),
   };
 }
 
