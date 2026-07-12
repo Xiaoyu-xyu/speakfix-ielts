@@ -1115,8 +1115,26 @@ function getAudioFileExtension(mimeType: string) {
     return normalizedText;
   }
 
-  function normalizeDisplayTranscript(cleanedTranscript: string) {
-    const text = normalizeAsrFragmentation(cleanedTranscript)
+  function normalizeDisplayTranscript(rawTranscript: string) {
+    const text = normalizeAsrFragmentation(
+      rawTranscript
+        .normalize("NFKC")
+        .replace(/\p{Extended_Pictographic}/gu, "")
+        .replace(
+          /\[[^\]]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^\]]*\]/gi,
+          " ",
+        )
+        .replace(
+          /\([^)]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^)]*\)/gi,
+          " ",
+        )
+        .replace(
+          /<[^>]*(?:noise|music|laugh|applause|silence|inaudible|cough)[^>]*>/gi,
+          " ",
+        )
+        .replace(/[♪♫♬♩★☆◆◇■□●○]/g, " ")
+        .replace(/[^\p{L}\p{N}\s'.,!?-]/gu, " "),
+    )
       .replace(/([.!?]){2,}/g, "$1")
       .replace(/\s+([.,!?])/g, "$1")
       .replace(/([.,!?])(?=\S)/g, "$1 ")
@@ -1600,7 +1618,7 @@ function getAudioFileExtension(mimeType: string) {
         }
 
         const cleanedTranscript = normalizeAsrTranscript(rawTranscript);
-        const displayTranscript = normalizeDisplayTranscript(cleanedTranscript);
+        const displayTranscript = normalizeDisplayTranscript(rawTranscript);
         const hasValidSpeech = hasValidAnswerText({
           cleanedTranscript,
           questionText: currentQuestion.text,
@@ -2090,7 +2108,7 @@ function getAudioFileExtension(mimeType: string) {
     const cleanedTranscript = submissionMeta.cleanedTranscript || answerText;
     const rawTranscript = submissionMeta.rawTranscript || cleanedTranscript;
     const displayTranscript =
-      submissionMeta.displayTranscript || normalizeDisplayTranscript(cleanedTranscript);
+      submissionMeta.displayTranscript || normalizeDisplayTranscript(rawTranscript);
     const submissionSnapshot: SubmissionSnapshot = {
       topicId: topic.id,
       questionId: questionSnapshot.id,
@@ -2704,8 +2722,13 @@ function getAudioFileExtension(mimeType: string) {
 
   function renderAnswer(answer: AnswerRecord) {
     const isRetryAnswer = answer.kind === "retry";
+    const shouldPreferDisplayTranscript =
+      answer.displayTranscript &&
+      answer.displayTranscript.trim() !== (answer.cleanedTranscript || answer.text).trim();
     const transcriptSegments =
-      isRetryAnswer && answer.retryFeedback?.markedRetryTranscript
+      shouldPreferDisplayTranscript
+        ? [{ text: answer.displayTranscript, type: "normal" as const }]
+        : isRetryAnswer && answer.retryFeedback?.markedRetryTranscript
         ? answer.retryFeedback.markedRetryTranscript
         : answer.kind === "first" && answer.polish?.markedTranscript
         ? answer.polish.markedTranscript
