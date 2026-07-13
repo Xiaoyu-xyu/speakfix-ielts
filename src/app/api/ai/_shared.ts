@@ -8,6 +8,7 @@ import {
   hasAiTimeStateConflict,
   hasAiUnsafeExtension,
   mapAiRetryJudgementToFeedback,
+  normalizeFormattingComparableText,
   type ApiPreAnswerResponse,
   type ApiPolishSegment,
   type ApiPolishResponse,
@@ -894,7 +895,10 @@ function diagnosePolishInput(input: PolishInput): PolishInputDiagnosis {
 }
 
 function hasSubstantiveDifference(left: string, right: string) {
-  return normalizeComparableAnswer(left) !== normalizeComparableAnswer(right);
+  return (
+    normalizeFormattingComparableText(left) !==
+    normalizeFormattingComparableText(right)
+  );
 }
 
 function createSafePolishForFixableIssue(input: PolishInput) {
@@ -1195,7 +1199,27 @@ function applyPolishFieldContract(
     result.extensionSentence = "";
   }
 
+  const extractedExpansion = extractExpansionOnlyPolish(
+    result.polishedAnswer,
+    input,
+  );
+
+  if (extractedExpansion) {
+    result.polishedAnswer = input.user_answer.trim();
+    result.hasMeaningfulPolish = false;
+    result.originalSegments = result.originalSegments.map((segment) => ({
+      ...segment,
+      markType: "none",
+      reason: "",
+    }));
+
+    if (!result.extensionSentence.trim()) {
+      result.extensionSentence = extractedExpansion;
+    }
+  }
+
   if (!result.hasMeaningfulPolish) {
+    result.polishedAnswer = input.user_answer.trim();
     result.originalSegments = result.originalSegments.map((segment) =>
       segment.markType === "orange"
         ? { ...segment, markType: "none", reason: "" }
@@ -1224,6 +1248,68 @@ function applyPolishFieldContract(
   }
 }
 
+function extractExpansionOnlyPolish(
+  polishedAnswer: string,
+  input: PolishInput,
+) {
+  const userAnswer = input.user_answer.trim();
+
+  if (!polishedAnswer.trim() || hasFixableLanguageIssue(userAnswer)) {
+    return "";
+  }
+
+  const expansionMatch = polishedAnswer.match(
+    /^(.+?)\s+(because|and|so|for example)\s+(.+)$/i,
+  );
+
+  if (!expansionMatch) {
+    return "";
+  }
+
+  const [, prefix, connector, tail] = expansionMatch;
+
+  if (!isSameAnswerBodyForPolishDisplay(prefix, input)) {
+    return "";
+  }
+
+  const extension = `${connector.toLowerCase()} ${tail.trim()}`.replace(
+    /^[a-z]/,
+    (char) => char.toUpperCase(),
+  );
+
+  return /[.!?]$/.test(extension) ? extension : `${extension}.`;
+}
+
+function isSameAnswerBodyForPolishDisplay(
+  polishedPrefix: string,
+  input: PolishInput,
+) {
+  const original = normalizeFormattingComparableText(input.user_answer);
+  const prefix = normalizeFormattingComparableText(polishedPrefix);
+
+  if (!original || !prefix) {
+    return false;
+  }
+
+  if (original === prefix) {
+    return true;
+  }
+
+  const question = normalizeComparableAnswer(input.question_text);
+  const removableQuestionVerbs = question.includes("wearing")
+    ? /\b(wearing|wear)\b/g
+    : null;
+
+  if (!removableQuestionVerbs) {
+    return false;
+  }
+
+  const strippedOriginal = original.replace(removableQuestionVerbs, "").replace(/\s+/g, " ").trim();
+  const strippedPrefix = prefix.replace(removableQuestionVerbs, "").replace(/\s+/g, " ").trim();
+
+  return strippedOriginal === strippedPrefix;
+}
+
 function isHighConfidenceGrammarSegment(segmentText: string, userAnswer: string) {
   const segment = normalizeComparableAnswer(segmentText);
   const answer = normalizeComparableAnswer(userAnswer);
@@ -1242,7 +1328,6 @@ function isHighConfidenceGrammarSegment(segmentText: string, userAnswer: string)
     /\bit\s+make\s+me\b/.test(segment) ||
     /\bmake\s+me\s+relax\b/.test(segment) ||
     /\bfeel\s+relax\b/.test(segment) ||
-    /\bvery\s+like\b/.test(segment) ||
     /\blike\s+wear\b/.test(segment) ||
     /\bmore\s+better\b/.test(segment)
   ) {
@@ -1256,13 +1341,12 @@ function isHighConfidenceGrammarSegment(segmentText: string, userAnswer: string)
       /\bit\s+make\s+me\b/.test(answer) ||
       /\bmake\s+me\s+relax\b/.test(answer) ||
       /\bfeel\s+relax\b/.test(answer) ||
-      /\bvery\s+like\b/.test(answer) ||
       /\blike\s+wear\b/.test(answer) ||
       /\bmore\s+better\b/.test(answer))
   );
 }
 
-function finalizePolishResponse({
+export function finalizePolishResponse({
   input,
   response,
   source,

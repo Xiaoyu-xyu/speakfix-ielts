@@ -486,6 +486,40 @@ export function countAiComparableWords(text: string) {
   return normalizeComparableText(text).split(/\s+/).filter(Boolean).length;
 }
 
+const BASIC_NUMBER_WORDS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+};
+
+const TENS_NUMBER_WORDS: Record<string, number> = {
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+};
+
 function getPart1Intent(
   questionText: string,
   answerStructureType?: AnswerStructureType,
@@ -798,7 +832,10 @@ export function diagnoseAiPolishInput(input: PolishInput): PolishInputDiagnosis 
 }
 
 export function hasAiSubstantiveDifference(left: string, right: string) {
-  return normalizeComparableText(left) !== normalizeComparableText(right);
+  return (
+    normalizeFormattingComparableText(left) !==
+    normalizeFormattingComparableText(right)
+  );
 }
 
 function createMarkedTranscript(userAnswer: string): MarkedTranscriptSegment[] {
@@ -817,7 +854,7 @@ function createMarkedTranscript(userAnswer: string): MarkedTranscriptSegment[] {
     const [before, after = ""] = userAnswer.split(/very like/i);
     return [
       ...(before ? [{ text: before, type: "normal" as const }] : []),
-      { text: "very like", type: "error" },
+      { text: "very like", type: "improve" },
       ...(after ? [{ text: after, type: "normal" as const }] : []),
     ];
   }
@@ -1289,6 +1326,49 @@ function normalizeComparableText(text: string) {
     .replace(/[^a-z0-9'\s]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function normalizeFormattingComparableText(text: string) {
+  const tokens = text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[’‘`´]/g, "'")
+    .replace(/[‐‑‒–—−-]/g, " ")
+    .replace(/'/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const normalizedTokens: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const nextToken = tokens[index + 1];
+
+    if (token in TENS_NUMBER_WORDS) {
+      const tens = TENS_NUMBER_WORDS[token];
+
+      if (nextToken && nextToken in BASIC_NUMBER_WORDS) {
+        normalizedTokens.push(String(tens + BASIC_NUMBER_WORDS[nextToken]));
+        index += 1;
+      } else {
+        normalizedTokens.push(String(tens));
+      }
+
+      continue;
+    }
+
+    if (token in BASIC_NUMBER_WORDS) {
+      normalizedTokens.push(String(BASIC_NUMBER_WORDS[token]));
+      continue;
+    }
+
+    normalizedTokens.push(token);
+  }
+
+  return normalizedTokens.join(" ");
 }
 
 function getStartedActionFromQuestion(questionText: string) {
