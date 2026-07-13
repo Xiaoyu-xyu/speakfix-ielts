@@ -514,6 +514,18 @@ function toRetryFeedbackViewModel(
   };
 }
 
+function normalizeRetryFeedbackTypeForAnalytics(type?: string) {
+  if (type === "采纳建议" || type === "adopted_suggestion") {
+    return "adopted_suggestion";
+  }
+
+  if (type === "仍需调整" || type === "needs_adjustment") {
+    return "needs_adjustment";
+  }
+
+  return "improved_expression";
+}
+
 function createMarkedRetryTranscript(
   retryTranscript: string,
   firstTranscript: string,
@@ -783,6 +795,17 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
   const [debugTextSubmitting, setDebugTextSubmitting] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [debugEvents, setDebugEvents] = useState<StoredEvent[]>([]);
+  const [testUserId] = useState(() => {
+    if (typeof window === "undefined") {
+      return "anonymous";
+    }
+
+    const value = new URLSearchParams(window.location.search)
+      .get("test_user_id")
+      ?.trim();
+
+    return value || "anonymous";
+  });
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputBarRef = useRef<HTMLElement | null>(null);
@@ -799,9 +822,11 @@ export function PracticeRoom({ topic }: PracticeRoomProps) {
     questionStarted: new Set<number>(),
     retryAnswerSubmitted: new Set<number>(),
     retryClicked: new Set<number>(),
+    retryFeedbackGenerated: new Set<number>(),
     topicCompleted: false,
     topicStarted: false,
   });
+  const topicStartedAtRef = useRef<number | null>(null);
   const [inputBarHeight, setInputBarHeight] = useState(88);
   const [pendingScrollTargetId, setPendingScrollTargetId] = useState<
     string | null
@@ -1166,16 +1191,6 @@ function getAudioFileExtension(mimeType: string) {
     if (!SpeechRecognitionConstructor) {
       setRecognitionSupported(false);
       setRecognitionError("speech_recognition_unsupported");
-      trackPracticeEvent("transcription_failed", currentQuestionIndex, {
-        ai_node: "A05_ASR_TRANSCRIPTION",
-        fallback_available: true,
-        fallback_reason: "speech_recognition_unsupported",
-        input_mode: "asr",
-        is_mock_transcription: false,
-        recognition_status: "unsupported",
-        reason: "speech_recognition_unsupported",
-        transcript_source: "none",
-      });
       setNotice("");
       return;
     }
@@ -1213,16 +1228,6 @@ function getAudioFileExtension(mimeType: string) {
         const error = event.error ?? "speech_recognition_error";
         const fallbackReason = normalizeSpeechFallbackReason(true, error);
         setRecognitionError(fallbackReason);
-        trackPracticeEvent("transcription_failed", currentQuestionIndex, {
-          ai_node: "A05_ASR_TRANSCRIPTION",
-          fallback_available: true,
-          fallback_reason: fallbackReason,
-          input_mode: "asr",
-          is_mock_transcription: false,
-          recognition_status: "failed",
-          reason: error,
-          transcript_source: "none",
-        });
 
         if (
           error === "not-allowed" ||
@@ -1240,16 +1245,6 @@ function getAudioFileExtension(mimeType: string) {
     } catch {
       setRecognitionSupported(true);
       setRecognitionError("recognition_error");
-      trackPracticeEvent("transcription_failed", currentQuestionIndex, {
-        ai_node: "A05_ASR_TRANSCRIPTION",
-        fallback_available: true,
-        fallback_reason: "recognition_error",
-        input_mode: "asr",
-        is_mock_transcription: false,
-        recognition_status: "failed",
-        reason: "speech_recognition_start_failed",
-        transcript_source: "none",
-      });
       setNotice("");
     }
   }
@@ -1280,7 +1275,10 @@ function getAudioFileExtension(mimeType: string) {
   ) {
     trackEvent(eventName, {
       ...eventContext(questionIndex),
-      payload,
+      payload: {
+        ...payload,
+        test_user_id: testUserId,
+      },
     });
     window.setTimeout(refreshDebugEvents, 80);
   }
@@ -1292,9 +1290,11 @@ function getAudioFileExtension(mimeType: string) {
       questionStarted: new Set<number>(),
       retryAnswerSubmitted: new Set<number>(),
       retryClicked: new Set<number>(),
+      retryFeedbackGenerated: new Set<number>(),
       topicCompleted: false,
       topicStarted: false,
     };
+    topicStartedAtRef.current = null;
   }
 
   function markTopicStarted() {
@@ -1303,6 +1303,7 @@ function getAudioFileExtension(mimeType: string) {
     }
 
     trackedRef.current.topicStarted = true;
+    topicStartedAtRef.current = Date.now();
     trackPracticeEvent("topic_started", 0);
   }
 
@@ -1711,6 +1712,38 @@ function getAudioFileExtension(mimeType: string) {
             retryDisplayTranscript: displayTranscript,
           }
         : undefined;
+
+    if (
+      kind === "retry" &&
+      retrySnapshot &&
+      !trackedRef.current.retryAnswerSubmitted.has(questionIndexSnapshot)
+    ) {
+      trackedRef.current.retryAnswerSubmitted.add(questionIndexSnapshot);
+      trackPracticeEvent("retry_answer_submitted", questionIndexSnapshot, {
+        ai_node: "A05_ASR_TRANSCRIPTION",
+        fallback_reason: submissionMeta.fallbackReason,
+        fallback_mode: submissionMeta.fallbackMode,
+        input_mode: submissionMeta.inputMode,
+        is_mock_transcription: submissionMeta.isMockTranscription,
+        recognition_status: submissionMeta.recognitionStatus,
+        asr_provider: submissionMeta.asrProvider,
+        asr_source: submissionMeta.asrSource,
+        asr_latency_ms: submissionMeta.asrLatencyMs,
+        audio_status: submissionMeta.audioStatus,
+        asr_status: submissionMeta.asrStatus,
+        raw_transcript: submissionMeta.rawTranscript,
+        cleaned_transcript: submissionMeta.cleanedTranscript,
+        display_transcript: displayTranscript,
+        has_valid_speech: submissionMeta.hasValidSpeech,
+        failure_type: submissionMeta.failureType,
+        audio_mime_type: submissionMeta.audioMimeType,
+        audio_duration_seconds: submissionMeta.recordedSeconds,
+        recording_duration_seconds: submissionMeta.recordedSeconds,
+        transcript_source: submissionMeta.transcriptSource,
+        retry_answer_text: cleanedTranscript,
+      });
+    }
+
     const retryFeedbackResult =
       kind === "retry" && retrySnapshot
         ? await generateRetryFeedback({
@@ -1748,10 +1781,17 @@ function getAudioFileExtension(mimeType: string) {
       polish?.polishedAnswer || polish?.noPolishNeeded,
     );
 
-    if (answerLength < 3) {
+    const answerHasValidMeaning = hasValidAnswerText({
+      cleanedTranscript,
+      questionText: questionSnapshot.text,
+      answerStructureType: questionSnapshot.answerStructureType,
+    });
+
+    if (answerLength < 3 && !answerHasValidMeaning) {
       trackPracticeEvent("answer_too_short_detected", questionIndexSnapshot, {
         answer_text: cleanedTranscript,
         answer_length: answerLength,
+        has_valid_meaning: answerHasValidMeaning,
       });
     }
 
@@ -1872,9 +1912,13 @@ function getAudioFileExtension(mimeType: string) {
     if (
       kind === "retry" &&
       retryFeedback &&
-      !trackedRef.current.retryAnswerSubmitted.has(questionIndexSnapshot)
+      !trackedRef.current.retryFeedbackGenerated.has(questionIndexSnapshot)
     ) {
-      trackedRef.current.retryAnswerSubmitted.add(questionIndexSnapshot);
+      const retryFeedbackType = normalizeRetryFeedbackTypeForAnalytics(
+        retryFeedback.type,
+      );
+
+      trackedRef.current.retryFeedbackGenerated.add(questionIndexSnapshot);
       trackPracticeEvent("retry_feedback_generated", questionIndexSnapshot, {
         ai_node: "retry_feedback",
         ai_provider: retryFeedback.aiProvider,
@@ -1882,37 +1926,7 @@ function getAudioFileExtension(mimeType: string) {
         fallback_reason: retryFeedback.fallbackReason,
         feedback_generation_mode: retryFeedback.generationMode,
         llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
-        retry_feedback_type: retryFeedback.type,
-      });
-      trackPracticeEvent("retry_answer_submitted", questionIndexSnapshot, {
-        ai_node: "A05_ASR_TRANSCRIPTION",
-        retry_ai_node: "retry_feedback",
-        retry_ai_provider: retryFeedback.aiProvider,
-        retry_ai_source: retryFeedback.aiSource,
-        retry_fallback_reason: retryFeedback.fallbackReason,
-        retry_llm_latency_ms: retryFeedback.llmLatencyMs ?? null,
-        fallback_reason: submissionMeta.fallbackReason,
-        fallback_mode: submissionMeta.fallbackMode,
-        feedback_generation_mode: retryFeedback.generationMode,
-        input_mode: submissionMeta.inputMode,
-        is_mock_transcription: submissionMeta.isMockTranscription,
-        recognition_status: submissionMeta.recognitionStatus,
-        asr_provider: submissionMeta.asrProvider,
-        asr_source: submissionMeta.asrSource,
-        asr_latency_ms: submissionMeta.asrLatencyMs,
-        audio_status: submissionMeta.audioStatus,
-        asr_status: submissionMeta.asrStatus,
-        raw_transcript: submissionMeta.rawTranscript,
-        cleaned_transcript: submissionMeta.cleanedTranscript,
-        display_transcript: displayTranscript,
-        has_valid_speech: submissionMeta.hasValidSpeech,
-        failure_type: submissionMeta.failureType,
-        audio_mime_type: submissionMeta.audioMimeType,
-        audio_duration_seconds: submissionMeta.recordedSeconds,
-        recording_duration_seconds: submissionMeta.recordedSeconds,
-        transcript_source: submissionMeta.transcriptSource,
-        retry_answer_text: cleanedTranscript,
-        retry_feedback_type: retryFeedback.type,
+        retry_feedback_type: retryFeedbackType,
       });
     }
 
@@ -2070,14 +2084,6 @@ function getAudioFileExtension(mimeType: string) {
     setStatus("polishExpanded");
 
     if (shouldExpand) {
-      const questionIndex = targetAnswer?.questionIndex ?? currentQuestionIndex;
-
-      if (targetAnswer?.kind === "first") {
-        trackPracticeEvent("polish_expand_opened", questionIndex, {
-          answer_id: answerId,
-        });
-      }
-
       setPendingScrollTargetId(
         targetAnswer?.kind === "first"
           ? `question-followup-${targetAnswer.questionIndex}`
@@ -2120,7 +2126,26 @@ function getAudioFileExtension(mimeType: string) {
     if (isLastQuestion) {
       if (!trackedRef.current.topicCompleted) {
         trackedRef.current.topicCompleted = true;
-        trackPracticeEvent("topic_completed", currentQuestionIndex);
+        const completedQuestionCount = new Set(
+          answers
+            .filter((answer) => answer.kind === "first")
+            .map((answer) => answer.questionIndex),
+        ).size;
+        const retryQuestionCount = new Set(
+          answers
+            .filter((answer) => answer.kind === "retry")
+            .map((answer) => answer.questionIndex),
+        ).size;
+        const totalDurationSeconds = topicStartedAtRef.current
+          ? Math.max(0, Math.round((Date.now() - topicStartedAtRef.current) / 1000))
+          : null;
+
+        trackPracticeEvent("topic_completed", currentQuestionIndex, {
+          completed_question_count: completedQuestionCount,
+          total_question_count: topic.questions.length,
+          retry_question_count: retryQuestionCount,
+          total_duration_seconds: totalDurationSeconds,
+        });
       }
       setStatus("completed");
       setShowCompletion(true);
