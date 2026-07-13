@@ -1026,6 +1026,14 @@ function hasUnsafePolishedFactChange(polishedAnswer: string, input: PolishInput)
     return true;
   }
 
+  if (
+    intent === "age" &&
+    /\b(?:1[0-9]|[2-9][0-9])\s*(?:years?\s*old)?\b/.test(polished) &&
+    !/\b(?:1[0-9]|[2-9][0-9])\s*(?:years?\s*old)?\b/.test(answer)
+  ) {
+    return true;
+  }
+
   if (containsDeniedSelfCorrectionFact(polished, input.user_answer)) {
     return true;
   }
@@ -1128,6 +1136,63 @@ function lowercaseInitial(text: string) {
   return text ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
 }
 
+function hasUnsafeAnswerFieldText(text: string) {
+  const normalized = normalizeComparableAnswer(text);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /[\u4e00-\u9fff]/.test(text) ||
+    /\b(?:you haven't|you have not|haven't really answered|have not really answered|start with|try to|you should|please answer|repeat the question|record again|re-?record|answer the question|need to answer|does not answer|not answer the question)\b/i.test(
+      text,
+    ) ||
+    /\b(?:this is not|this doesn't|this does not|the answer is|your answer|the transcript|no valid speech|low confidence|off topic)\b/i.test(
+      text,
+    ) ||
+    /\b(?:give a direct answer|add one simple reason|add a simple detail|say it again)\b/i.test(
+      text,
+    ) ||
+    /\b(?:answer directly|directly answer|add one short reason|add a short reason|add one short detail|add a short detail)\b/i.test(
+      text,
+    )
+  );
+}
+
+function applyPolishFieldContract(
+  result: ApiPolishResponse,
+  input: PolishInput,
+  diagnosis: ReturnType<typeof diagnoseAiPolishInput>,
+) {
+  if (hasUnsafeAnswerFieldText(result.polishedAnswer)) {
+    const safePolishedAnswer =
+      diagnosis === "fixable_language_issue"
+        ? createSafePolishForFixableIssue(input)
+        : input.user_answer.trim();
+
+    result.polishedAnswer = safePolishedAnswer;
+    result.hasMeaningfulPolish =
+      diagnosis === "fixable_language_issue" &&
+      hasAiSubstantiveDifference(safePolishedAnswer, input.user_answer);
+  }
+
+  if (
+    hasUnsafeAnswerFieldText(result.extensionSentence) ||
+    hasAiUnsafeExtension(result.extensionSentence, input)
+  ) {
+    result.extensionSentence = "";
+  }
+
+  if (!result.hasMeaningfulPolish) {
+    result.originalSegments = result.originalSegments.map((segment) =>
+      segment.markType === "orange"
+        ? { ...segment, markType: "none", reason: "" }
+        : segment,
+    );
+  }
+}
+
 function finalizePolishResponse({
   input,
   response,
@@ -1162,7 +1227,7 @@ function finalizePolishResponse({
     };
   }
 
-  if (diagnosis === "meta_or_no_answer") {
+  if (diagnosis === "meta_or_no_answer" || diagnosis === "off_topic") {
     return {
       ...createSafeNoAnswerPolishResponse(input),
       source,
@@ -1256,6 +1321,8 @@ function finalizePolishResponse({
       llmLatencyMs: result.llmLatencyMs,
     };
   }
+
+  applyPolishFieldContract(result, input, diagnosis);
 
   return result;
 }

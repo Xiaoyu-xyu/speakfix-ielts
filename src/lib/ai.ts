@@ -164,6 +164,7 @@ export type PolishInputDiagnosis =
   | "natural_complete"
   | "correct_but_short"
   | "fixable_language_issue"
+  | "off_topic"
   | "meta_or_no_answer"
   | "low_confidence_transcript";
 
@@ -499,6 +500,10 @@ function getPart1Intent(
     return "living_place";
   }
 
+  if (/\bprefer|rather\b/.test(text) || answerStructureType === "choice_compare") {
+    return "choice";
+  }
+
   if (/\bworking or studying|what do you do|study|work\b/.test(text)) {
     return "work_study";
   }
@@ -509,10 +514,6 @@ function getPart1Intent(
 
   if (/\bhave you ever|when did you last|did you\b/.test(text)) {
     return "experience";
-  }
-
-  if (/\bprefer|rather\b/.test(text) || answerStructureType === "choice_compare") {
-    return "choice";
   }
 
   if (
@@ -610,6 +611,54 @@ function isLikelyPlaceAnswerText(answerText: string) {
   return words.length === 1 && /^[a-z][a-z-]{2,}$/.test(words[0]);
 }
 
+function hasChoiceSelectionSignal(answerText: string, questionText: string) {
+  const answer = normalizeComparableText(answerText);
+  const answerWords = answer.split(/\s+/).filter(Boolean);
+
+  if (!answer || isNoiseOrFillerAnswer(answerText)) {
+    return false;
+  }
+
+  if (/\b(?:prefer|rather|choose)\b/.test(answer)) {
+    return true;
+  }
+
+  if (answerWords.length > 10) {
+    return false;
+  }
+
+  const stopWords = new Set([
+    "do",
+    "you",
+    "prefer",
+    "to",
+    "wear",
+    "or",
+    "and",
+    "the",
+    "a",
+    "an",
+    "kind",
+    "of",
+    "clothes",
+    "study",
+    "at",
+    "in",
+    "like",
+    "what",
+    "which",
+    "would",
+    "rather",
+  ]);
+  const questionOptionWords = new Set(
+    normalizeComparableText(questionText)
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !stopWords.has(word)),
+  );
+
+  return answerWords.some((word) => questionOptionWords.has(word));
+}
+
 export function isAiCoreShortAnswer(input: PolishInput) {
   const answer = normalizeComparableText(input.user_answer);
   const intent = getPart1Intent(input.question_text, input.answerStructureType);
@@ -639,6 +688,53 @@ export function isAiCoreShortAnswer(input: PolishInput) {
 
   if (isLikelyYesNoQuestion(input.question_text, input.answerStructureType)) {
     return /^(yes|no|yeah|nope|not really|sometimes|usually|maybe|sure)\b/.test(answer);
+  }
+
+  if (intent === "choice") {
+    return hasChoiceSelectionSignal(input.user_answer, input.question_text);
+  }
+
+  return false;
+}
+
+function isAiLikelyOffTopicPolishInput(input: PolishInput) {
+  const answer = normalizeComparableText(input.user_answer);
+  const intent = getPart1Intent(input.question_text, input.answerStructureType);
+
+  if (!answer || hasAiMetaOrNoAnswerExpression(input.user_answer)) {
+    return false;
+  }
+
+  if (intent === "age") {
+    const hasAgeAnswer = /\b\d{1,2}\b|\byears?\s+old\b|\b(twenty|thirty|forty|fifty|sixty)\b/.test(
+      answer,
+    );
+    const hasPlaceOnlySignal =
+      /\b(i live|live in|from|hometown|city|town|village|place|area)\b/.test(
+        answer,
+      );
+
+    return !hasAgeAnswer && hasPlaceOnlySignal;
+  }
+
+  if (intent === "living_place" || intent === "place") {
+    const hasPlaceAnswer = isLikelyPlaceAnswerText(input.user_answer);
+    const hasAgeOnlySignal = /\b\d{1,2}\b|\byears?\s+old\b/.test(answer);
+
+    return !hasPlaceAnswer && hasAgeOnlySignal;
+  }
+
+  if (intent === "choice") {
+    const hasChoiceAnswer = hasChoiceSelectionSignal(
+      input.user_answer,
+      input.question_text,
+    );
+    const hasUnrelatedProfileSignal =
+      /\b(?:years?\s+old|i live|live in|from|hometown|city|town|village)\b/.test(
+        answer,
+      );
+
+    return !hasChoiceAnswer && hasUnrelatedProfileSignal;
   }
 
   return false;
@@ -676,6 +772,10 @@ export function hasAiFixableLanguageIssue(answer: string) {
 export function diagnoseAiPolishInput(input: PolishInput): PolishInputDiagnosis {
   if (hasAiMetaOrNoAnswerExpression(input.user_answer)) {
     return "meta_or_no_answer";
+  }
+
+  if (isAiLikelyOffTopicPolishInput(input)) {
+    return "off_topic";
   }
 
   if (isAiCoreShortAnswer(input)) {
@@ -1016,7 +1116,11 @@ function isLikelyAnsweringQuestion(input: PolishInput) {
 export function createMockPolishResult(input: PolishInput): PolishResult {
   const diagnosis = diagnoseAiPolishInput(input);
 
-  if (diagnosis === "meta_or_no_answer" || diagnosis === "low_confidence_transcript") {
+  if (
+    diagnosis === "meta_or_no_answer" ||
+    diagnosis === "off_topic" ||
+    diagnosis === "low_confidence_transcript"
+  ) {
     return {
       markedTranscript: [{ text: input.user_answer, type: "improve" }],
       polishedAnswer: "",
@@ -1457,7 +1561,7 @@ export function createAiRetryJudgement(input: RetryFeedbackInput): A04Judgement 
     independentlyImproved:
       answeredCoreQuestion &&
       !repeatedOriginal &&
-      adoptedSuggestion === "none" &&
+      (adoptedSuggestion === "none" || adoptedSuggestion === "synonym") &&
       (countAiComparableWords(retry) > countAiComparableWords(first) ||
         sharedContentWordCount(
           normalizeComparableText(first),
@@ -1501,6 +1605,10 @@ export function isAiCoreRetryAnswer(
     /\bwhen did you start\b/i.test(input.question_text)
   ) {
     return /\b(ago|last|since|yesterday|today|year|month|week|day|started|before|past)\b/.test(answer);
+  }
+
+  if (intent === "choice") {
+    return hasChoiceSelectionSignal(answerText, input.question_text);
   }
 
   if (isLikelyYesNoQuestion(input.question_text, input.answerStructureType)) {
@@ -1551,6 +1659,20 @@ function getAiA04AdoptionState(
   const suggestion = normalizeComparableText(
     `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
   );
+  const suggestionChoice = getChoiceSelectionSide(
+    `${input.polished_answer} ${input.expansion_sentence ?? ""}`,
+    input.question_text,
+  );
+  const retryChoice = getChoiceSelectionSide(retryAnswer, input.question_text);
+
+  if (
+    input.answerStructureType === "choice_compare" &&
+    suggestionChoice &&
+    retryChoice &&
+    suggestionChoice !== retryChoice
+  ) {
+    return "none";
+  }
 
   if (extension && extension.length >= 12 && retry.includes(extension)) {
     return "full";
@@ -1568,15 +1690,71 @@ function getAiA04AdoptionState(
     return "full";
   }
 
-  if (suggestion && sharedContentWordCount(suggestion, retry) >= 4) {
-    return "partial";
-  }
-
   if (suggestion && sharedContentWordCount(suggestion, retry) >= 3) {
     return "synonym";
   }
 
   return "none";
+}
+
+function getChoiceSelectionSide(answerText: string, questionText: string) {
+  const question = normalizeComparableText(questionText);
+  const answer = normalizeComparableText(answerText);
+  const parts = question.split(/\bor\b/).map((part) => part.trim());
+
+  if (parts.length < 2 || !answer) {
+    return null;
+  }
+
+  const firstOptionWords = getChoiceOptionWords(parts[0]);
+  const secondOptionWords = getChoiceOptionWords(parts.slice(1).join(" or "));
+  const firstScore = firstOptionWords.filter((word) =>
+    new RegExp(`\\b${escapeRegExp(word)}\\b`).test(answer),
+  ).length;
+  const secondScore = secondOptionWords.filter((word) =>
+    new RegExp(`\\b${escapeRegExp(word)}\\b`).test(answer),
+  ).length;
+
+  if (firstScore === secondScore) {
+    return null;
+  }
+
+  return firstScore > secondScore ? "first" : "second";
+}
+
+function getChoiceOptionWords(optionText: string) {
+  const stopWords = new Set([
+    "do",
+    "you",
+    "prefer",
+    "to",
+    "would",
+    "rather",
+    "at",
+    "in",
+    "a",
+    "an",
+    "the",
+    "and",
+    "because",
+    "it",
+    "is",
+    "more",
+    "study",
+    "studying",
+    "wear",
+    "wearing",
+    "clothes",
+  ]);
+
+  return optionText
+    .split(/\s+/)
+    .map((word) => word.replace(/[^a-z0-9'-]/g, ""))
+    .filter((word) => word.length > 2 && !stopWords.has(word));
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeAdoptionText(text: string) {
@@ -1641,7 +1819,8 @@ export function mapAiRetryJudgementToFeedback(
 
   if (
     judgement.answeredCoreQuestion &&
-    judgement.adoptedSuggestion !== "none" &&
+    (judgement.adoptedSuggestion === "full" ||
+      judgement.adoptedSuggestion === "partial") &&
     !judgement.introducedNewError &&
     !judgement.regressed
   ) {
@@ -1917,7 +2096,7 @@ function mapApiPolishToPolishResult(
       type:
         segment.markType === "red"
           ? "error"
-          : segment.markType === "orange"
+          : result.hasMeaningfulPolish && segment.markType === "orange"
             ? "improve"
             : "normal",
     })),

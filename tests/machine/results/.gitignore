@@ -1,0 +1,4 @@
+*.json
+*.json.tmp
+*.md
+!.gitignore
