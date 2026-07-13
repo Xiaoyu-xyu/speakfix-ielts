@@ -66,6 +66,18 @@ const cases = [
     },
   },
   {
+    name: "spoken age display keeps spoken form",
+    raw: "twenty-four",
+    questionText: "How old are you?",
+    answerStructureType: "basic_fact",
+    expect: {
+      language: "english_answer",
+      cleaned: "twenty-four.",
+      display: "Twenty-four",
+      valid: true,
+    },
+  },
+  {
     name: "numeric age remains valid for age question",
     raw: "24.",
     questionText: "How old are you?",

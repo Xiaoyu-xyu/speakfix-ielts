@@ -2331,7 +2331,7 @@ function getAudioFileExtension(mimeType: string) {
                 <div className="rounded-xl bg-white/80 px-3 py-2 text-sm leading-6 text-slate-700">
                   {answer.polish?.noPolishNeeded ? (
                     <p>
-                      <span className="font-bold text-ink">润色：</span>
+                      <span className="font-bold text-ink">反馈：</span>
                       <span className="text-bamboo-800">
                         说得很自然，继续加油！
                       </span>

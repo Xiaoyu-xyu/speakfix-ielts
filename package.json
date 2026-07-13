@@ -8,6 +8,7 @@
     "machine:validate-fixture": "node tests/machine/run-a02-a05-machine-checks.js --validate-fixture",
     "machine:dry-run": "node tests/machine/run-a02-a05-machine-checks.js --dry-run",
     "test:a05": "node tests/machine/test-speech-transcript.js",
+    "test:polish-contract": "node tests/machine/test-polish-contract.js",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit"

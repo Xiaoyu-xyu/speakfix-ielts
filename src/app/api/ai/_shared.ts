@@ -1096,7 +1096,7 @@ function createSafeNoAnswerPolishResponse(input: PolishInput): ApiPolishResponse
     originalSegments: [
       {
         text: input.user_answer,
-        markType: "orange",
+        markType: "none",
         reason: "This does not answer the question yet.",
       },
     ],
@@ -1165,6 +1165,17 @@ function applyPolishFieldContract(
   input: PolishInput,
   diagnosis: ReturnType<typeof diagnoseAiPolishInput>,
 ) {
+  result.originalSegments = result.originalSegments.map((segment) => {
+    if (
+      segment.markType === "red" &&
+      !isHighConfidenceGrammarSegment(segment.text, input.user_answer)
+    ) {
+      return { ...segment, markType: "none", reason: "" };
+    }
+
+    return segment;
+  });
+
   if (hasUnsafeAnswerFieldText(result.polishedAnswer)) {
     const safePolishedAnswer =
       diagnosis === "fixable_language_issue"
@@ -1191,6 +1202,64 @@ function applyPolishFieldContract(
         : segment,
     );
   }
+
+  const hasMarkedPolish = result.originalSegments.some((segment) =>
+    segment.markType === "red" || segment.markType === "orange",
+  );
+
+  if (hasMarkedPolish && !hasAiSubstantiveDifference(result.polishedAnswer, input.user_answer)) {
+    const safePolishedAnswer = createSafePolishForFixableIssue(input);
+
+    if (hasAiSubstantiveDifference(safePolishedAnswer, input.user_answer)) {
+      result.polishedAnswer = safePolishedAnswer;
+      result.hasMeaningfulPolish = true;
+    } else {
+      result.originalSegments = result.originalSegments.map((segment) => ({
+        ...segment,
+        markType: "none",
+        reason: "",
+      }));
+      result.hasMeaningfulPolish = false;
+    }
+  }
+}
+
+function isHighConfidenceGrammarSegment(segmentText: string, userAnswer: string) {
+  const segment = normalizeComparableAnswer(segmentText);
+  const answer = normalizeComparableAnswer(userAnswer);
+
+  if (!segment) {
+    return false;
+  }
+
+  if (/\b(?:sorry|i mean|what i mean is|i meant|um|uh|er|ah|hmm)\b/.test(segment)) {
+    return false;
+  }
+
+  if (
+    /\b(?:they|we|you)\s+is\b/.test(segment) ||
+    /\bi\s+is\b/.test(segment) ||
+    /\bit\s+make\s+me\b/.test(segment) ||
+    /\bmake\s+me\s+relax\b/.test(segment) ||
+    /\bfeel\s+relax\b/.test(segment) ||
+    /\bvery\s+like\b/.test(segment) ||
+    /\blike\s+wear\b/.test(segment) ||
+    /\bmore\s+better\b/.test(segment)
+  ) {
+    return true;
+  }
+
+  return (
+    segment.split(/\s+/).length > 1 &&
+    (/\b(?:they|we|you)\s+is\b/.test(answer) ||
+      /\bi\s+is\b/.test(answer) ||
+      /\bit\s+make\s+me\b/.test(answer) ||
+      /\bmake\s+me\s+relax\b/.test(answer) ||
+      /\bfeel\s+relax\b/.test(answer) ||
+      /\bvery\s+like\b/.test(answer) ||
+      /\blike\s+wear\b/.test(answer) ||
+      /\bmore\s+better\b/.test(answer))
+  );
 }
 
 function finalizePolishResponse({
@@ -1217,7 +1286,7 @@ function finalizePolishResponse({
       originalSegments: [
         {
           text: input.user_answer,
-          markType: "orange",
+          markType: "none",
           reason: "The transcript is not reliable enough to polish safely.",
         },
       ],
@@ -1268,8 +1337,18 @@ function finalizePolishResponse({
       result.originalSegments = [
         {
           text: input.user_answer,
-          markType: "orange",
-          reason: "This can be made more natural.",
+          markType: isHighConfidenceGrammarSegment(
+            input.user_answer,
+            input.user_answer,
+          )
+            ? "red"
+            : "orange",
+          reason: isHighConfidenceGrammarSegment(
+            input.user_answer,
+            input.user_answer,
+          )
+            ? "Grammar issue."
+            : "This can be made more natural.",
         },
       ];
     }
