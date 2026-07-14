@@ -226,7 +226,12 @@ function getA05Evidence(testCase) {
       ? ""
       : normalizeDisplayTranscript(rawTranscript);
   const cleanedTranscript =
-    languageIntent === "english_answer" ? normalizeAsrTranscript(rawTranscript) : "";
+    languageIntent === "english_answer"
+      ? normalizeAsrTranscript(rawTranscript, {
+          questionText: testCase.questionText,
+          answerStructureType: testCase.answerStructureType,
+        })
+      : "";
   const valid =
     languageIntent === "english_answer" &&
     hasValidAnswerText({

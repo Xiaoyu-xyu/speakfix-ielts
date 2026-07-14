@@ -56,6 +56,8 @@ type AnswerRecord = {
     shouldExpand: boolean;
     expansionType: ExpansionType;
     expansionSentence: string;
+    completeAnswer: string;
+    reasonSuggestion: string;
     reason: string;
     markedErrorCount: number;
     markedImproveCount: number;
@@ -483,6 +485,8 @@ function toPolishViewModel(result: AiServiceResult<PolishResult>) {
     shouldExpand: result.data.shouldExpand,
     expansionType: result.data.expansionType,
     expansionSentence: result.data.expansionSentence,
+    completeAnswer: result.data.completeAnswer,
+    reasonSuggestion: result.data.reasonSuggestion,
     reason: result.data.reason,
     markedErrorCount,
     markedImproveCount,
@@ -1147,7 +1151,10 @@ function getAudioFileExtension(mimeType: string) {
           return failureResult("mixed_unclear", result.latency, "recorded", rawTranscript);
         }
 
-        const cleanedTranscript = normalizeAsrTranscript(rawTranscript);
+        const cleanedTranscript = normalizeAsrTranscript(rawTranscript, {
+          questionText: currentQuestion.text,
+          answerStructureType: currentQuestion.answerStructureType,
+        });
         const displayTranscript = normalizeDisplayTranscript(rawTranscript);
         const hasValidSpeech = hasValidAnswerText({
           cleanedTranscript,
@@ -2314,7 +2321,7 @@ function getAudioFileExtension(mimeType: string) {
             }
             className="flex w-full items-center justify-between text-left text-sm font-bold text-bamboo-700"
           >
-            {isRetryAnswer ? "重说反馈" : "润色扩展"}
+            {isRetryAnswer ? "重说反馈" : "AI反馈"}
             <ChevronIcon
               className={`h-4 w-4 transition ${
                 answer.polishExpanded ? "rotate-90" : ""
@@ -2328,7 +2335,7 @@ function getAudioFileExtension(mimeType: string) {
                 className="mt-1 rounded-xl bg-white/80 px-3 py-2 text-sm font-semibold leading-6 text-slate-500"
                 data-scroll-id={`answer-assist-${answer.id}`}
               >
-                {isRetryAnswer ? "AI 正在生成重说反馈..." : "AI 正在生成润色扩展..."}
+                {isRetryAnswer ? "AI 正在生成重说反馈..." : "AI 正在生成反馈..."}
               </div>
             ) : isRetryAnswer ? (
               <div
@@ -2348,34 +2355,17 @@ function getAudioFileExtension(mimeType: string) {
                 className="mt-1 grid gap-2"
                 data-scroll-id={`answer-assist-${answer.id}`}
               >
-                <p className="px-1 text-xs font-semibold text-slate-400">
-                  <span className="text-red-600">红色</span>
-                  ＝语法错误；<span className="text-amber-600">橙色</span>
-                  ＝雅思口语化优化
-                </p>
                 <div className="rounded-xl bg-white/80 px-3 py-2 text-sm leading-6 text-slate-700">
-                  {answer.polish?.noPolishNeeded ? (
-                    <p>
-                      <span className="font-bold text-ink">反馈：</span>
-                      <span className="text-bamboo-800">
-                        说得很自然，继续加油！
-                      </span>
-                    </p>
-                  ) : (
-                    <p>
-                      <span className="font-bold text-ink">润色：</span>
-                      <span className="text-bamboo-800">
-                        {answer.polish?.polishedAnswer}
-                      </span>
-                    </p>
-                  )}
-                  {answer.polish?.shouldExpand &&
-                    answer.polish.expansionSentence.trim() && (
-                      <p className="mt-1">
-                        <span className="font-bold text-ink">扩展：</span>
-                        {`${answer.polish.expansionType}。${answer.polish.expansionSentence}`}
-                      </p>
-                    )}
+                  <p className="text-bamboo-800">
+                    {answer.polish?.completeAnswer ||
+                      answer.polish?.polishedAnswer ||
+                      answer.cleanedTranscript ||
+                      answer.text}
+                  </p>
+                  <p className="mt-2 text-slate-600">
+                    {answer.polish?.reasonSuggestion ||
+                      "你的回答已经自然完整，可以直接这样说。"}
+                  </p>
                 </div>
               </div>
             )

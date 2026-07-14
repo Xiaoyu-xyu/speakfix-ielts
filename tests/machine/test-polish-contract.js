@@ -149,9 +149,16 @@ const case1Input = createInput({
 assertNoPolishForFormattingOnly(
   modelResponse(case1Input, {
     polishedAnswer: "I like to wear simple-style clothes.",
+    extensionSentence: "They feel comfortable and easy for me.",
   }),
   case1Input.user_answer,
 );
+const caseA = modelResponse(case1Input, {
+  polishedAnswer: "I like to wear simple-style clothes.",
+  extensionSentence: "They feel comfortable and easy for me.",
+});
+assert.ok(/补充/.test(caseA.reasonSuggestion));
+assert.ok(!/优化了原句|修正/.test(caseA.reasonSuggestion));
 
 const case2Input = createInput({
   question_text: "Do you like wearing T-shirts?",
@@ -195,6 +202,7 @@ const case4 = modelResponse(case4Input, {
 assert.strictEqual(case4.hasMeaningfulPolish, true);
 assert.ok(markTypes(case4).includes("red"));
 assert.ok(/they make me relaxed/i.test(case4.polishedAnswer));
+assert.ok(/代词|动词|复数/.test(case4.reasonSuggestion));
 
 const case5Input = createInput({
   question_text: "Do you like wearing T-shirts?",
@@ -214,6 +222,7 @@ const case5 = modelResponse(case5Input, {
 assert.strictEqual(case5.hasMeaningfulPolish, true);
 assert.ok(markTypes(case5).includes("orange"));
 assert.ok(/really like/i.test(case5.polishedAnswer));
+assert.ok(/口语|自然|搭配/.test(case5.reasonSuggestion));
 
 const case6Input = createInput({
   question_text: "Do you like wearing T-shirts?",
@@ -227,6 +236,51 @@ assert.strictEqual(case6.hasMeaningfulPolish, false);
 assert.deepStrictEqual(markTypes(case6), ["none"]);
 assert.strictEqual(case6.polishedAnswer, case6Input.user_answer);
 assert.ok(/because they/i.test(case6.extensionSentence));
+assert.ok(/补充/.test(case6.reasonSuggestion));
+
+const caseCInput = createInput({
+  question_text: "What kind of clothes do you like to wear?",
+  answerStructureType: "type_reason",
+  user_answer: "I like comfortable clothes.",
+});
+const caseC = modelResponse(caseCInput, {
+  polishedAnswer: "I like comfortable clothes.",
+  extensionSentence: "They feel easy and natural for me.",
+});
+assert.strictEqual(caseC.hasMeaningfulPolish, false);
+assert.deepStrictEqual(markTypes(caseC), ["none"]);
+assert.strictEqual(caseC.polishedAnswer, caseCInput.user_answer);
+assert.ok(/They feel easy/.test(caseC.extensionSentence));
+assert.ok(/补充/.test(caseC.reasonSuggestion));
+
+const caseDInput = createInput({
+  question_text: "Do you like wearing T-shirts?",
+  answerStructureType: "yes_no_reason",
+  user_answer: "Yes, I like wearing T-shirts because they are comfortable and easy to match.",
+});
+const caseD = modelResponse(caseDInput, {
+  originalSegments: [
+    {
+      text: caseDInput.user_answer,
+      markType: "none",
+      reason: "",
+    },
+  ],
+  polishedAnswer: caseDInput.user_answer,
+  extensionSentence: "",
+  hasMeaningfulPolish: false,
+});
+assert.strictEqual(caseD.hasMeaningfulPolish, false);
+assert.deepStrictEqual(markTypes(caseD), ["none"]);
+assert.strictEqual(caseD.polishedAnswer, caseDInput.user_answer);
+assert.ok(/自然完整|直接/.test(caseD.reasonSuggestion));
+
+const caseG = modelResponse(caseCInput, {
+  polishedAnswer: "I like comfortable clothes.",
+  extensionSentence: "I wear them at school with my friends every weekend.",
+});
+assert.strictEqual(caseG.extensionSentence, "");
+assert.ok(!/school|friends|weekend/i.test(caseG.extensionSentence));
 
 const case7Input = createInput({
   question_text: "Do you work or study?",
@@ -258,4 +312,4 @@ assert.strictEqual(
   "equivalent spoken-number formatting should not be substantive",
 );
 
-console.log("polish-contract tests passed=11");
+console.log("polish-contract tests passed=16");

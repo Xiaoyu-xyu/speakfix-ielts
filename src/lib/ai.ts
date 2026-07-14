@@ -77,6 +77,8 @@ export type PolishResult = {
   shouldExpand: boolean;
   expansionType: ExpansionType;
   expansionSentence: string;
+  completeAnswer: string;
+  reasonSuggestion: string;
   reason: string;
 };
 
@@ -90,6 +92,7 @@ export type ApiPolishResponse = {
   originalSegments: ApiPolishSegment[];
   polishedAnswer: string;
   extensionSentence: string;
+  reasonSuggestion: string;
   hasMeaningfulPolish: boolean;
   source: "llm" | "mock_fallback";
   aiProvider: "openai" | "siliconflow";
@@ -983,7 +986,7 @@ function createSafePolish(input: PolishInput): PolishResult {
   const answerType = classifyPolishAnswer(input);
 
   if (answerType === "off_topic_or_meta") {
-    return {
+    return completePolishResultFields({
       markedTranscript: [{ text: input.user_answer, type: "improve" }],
       polishedAnswer:
         "You haven't really answered the question yet. Start with a direct answer, then add one simple reason or detail.",
@@ -993,7 +996,7 @@ function createSafePolish(input: PolishInput): PolishResult {
       expansionSentence: createAnswerPathSentence(input),
       reason:
         "This has not really answered the question yet, so give a direct answer and one concrete detail.",
-    };
+    }, input);
   }
 
   const polishedAnswer = createSafePolishedAnswer(input);
@@ -1017,7 +1020,7 @@ function createSafePolish(input: PolishInput): PolishResult {
     ? getSafeExpansionType(input)
     : "\u65e0\u9700\u6269\u5c55";
 
-  return {
+  return completePolishResultFields({
     markedTranscript: createMarkedTranscript(input.user_answer),
     polishedAnswer:
       noPolishNeeded ||
@@ -1037,7 +1040,7 @@ function createSafePolish(input: PolishInput): PolishResult {
     reason: shouldExpand
       ? "This already answers the core question, and one simple detail can make it more like a Part 1 short answer."
       : "The answer already has enough basic information for a short Part 1 response.",
-  };
+  }, input);
 }
 
 type PolishAnswerType =
@@ -1158,7 +1161,7 @@ export function createMockPolishResult(input: PolishInput): PolishResult {
     diagnosis === "off_topic" ||
     diagnosis === "low_confidence_transcript"
   ) {
-    return {
+    return completePolishResultFields({
       markedTranscript: [{ text: input.user_answer, type: "improve" }],
       polishedAnswer: "",
       noPolishNeeded: true,
@@ -1169,7 +1172,7 @@ export function createMockPolishResult(input: PolishInput): PolishResult {
         diagnosis === "low_confidence_transcript"
           ? "The transcript is not reliable enough to polish safely."
           : "This has not really answered the question yet, so give a direct answer and one concrete detail.",
-    };
+    }, input);
   }
 
   const result = createSafePolish(input);
@@ -1190,7 +1193,51 @@ export function createMockPolishResult(input: PolishInput): PolishResult {
     result.expansionType = "\u65e0\u9700\u6269\u5c55" as ExpansionType;
   }
 
-  return result;
+  return completePolishResultFields(result, input);
+}
+
+function completePolishResultFields(
+  result: Omit<PolishResult, "completeAnswer" | "reasonSuggestion">,
+  input: PolishInput,
+): PolishResult {
+  const baseAnswer = result.polishedAnswer.trim() || input.user_answer.trim();
+
+  return {
+    ...result,
+    completeAnswer: buildCompletePolishAnswer(baseAnswer, result.expansionSentence),
+    reasonSuggestion: createLocalReasonSuggestion(result, input),
+  };
+}
+
+function createLocalReasonSuggestion(
+  result: Omit<PolishResult, "completeAnswer" | "reasonSuggestion">,
+  input: PolishInput,
+) {
+  const hasError = result.markedTranscript.some((segment) => segment.type === "error");
+  const hasImprove = result.markedTranscript.some((segment) => segment.type === "improve");
+  const hasExtension = Boolean(result.expansionSentence.trim());
+
+  if (hasError) {
+    if (/\bit\s+make\s+me\b/i.test(input.user_answer)) {
+      return "我帮你修正了代词和动词搭配；下次说到复数名词时，注意用 they 和复数动词。";
+    }
+
+    return "我帮你修正了一处语法搭配；下次可以先确认主语和动词形式是否一致。";
+  }
+
+  if (hasImprove && result.polishedAnswer.trim()) {
+    return "我把表达改得更符合日常口语；下次可以优先使用更自然的固定搭配。";
+  }
+
+  if (hasExtension) {
+    return "你的原句已经正确，我补充了一句简单原因；下次可以在观点后补充原因或感受。";
+  }
+
+  if (diagnoseAiPolishInput(input) === "low_confidence_transcript") {
+    return "转写中有一处表达不太明确，我按当前语义保守处理；下次可以先确认转写是否准确。";
+  }
+
+  return "你的回答已经自然完整，可以直接这样说。";
 }
 
 function createSafePolishedAnswer(input: PolishInput) {
@@ -1459,7 +1506,17 @@ export function hasAiUnsafeExtension(extensionSentence: string, input: PolishInp
     /\b(?:history|historical|culture|cultural|famous|tourist|ancient)\b/,
     /\b(?:family|parents|friends|background)\b/,
     /\b(?:born|birth|birthplace|opportunit(?:y|ies))\b/,
+    /\b(?:every weekend|on weekends?|last weekend|yesterday|last year)\b/,
   ];
+
+  if (
+    sensitivePatterns.some((pattern) => {
+      const match = extension.match(pattern)?.[0];
+      return Boolean(match && !answer.includes(match));
+    })
+  ) {
+    return true;
+  }
 
   if (
     intent === "age" &&
@@ -1973,6 +2030,9 @@ function validatePolishResult(result: PolishResult) {
     typeof result.shouldExpand === "boolean" &&
     Boolean(result.expansionType) &&
     typeof result.expansionSentence === "string" &&
+    typeof result.completeAnswer === "string" &&
+    Boolean(result.completeAnswer.trim()) &&
+    typeof result.reasonSuggestion === "string" &&
     typeof result.reason === "string"
   );
 }
@@ -2170,6 +2230,11 @@ function mapApiPolishToPolishResult(
   result: ApiPolishResponse,
   fallback: PolishResult,
 ): PolishResult {
+  const completeAnswer = buildCompletePolishAnswer(
+    result.polishedAnswer,
+    result.extensionSentence,
+  );
+
   return {
     markedTranscript: result.originalSegments.map((segment) => ({
       text: segment.text,
@@ -2187,10 +2252,23 @@ function mapApiPolishToPolishResult(
       ? fallback.expansionType
       : ("\u65e0\u9700\u6269\u5c55" as ExpansionType),
     expansionSentence: result.extensionSentence,
-    reason: result.extensionSentence.trim()
+    completeAnswer,
+    reasonSuggestion: result.reasonSuggestion,
+    reason: result.reasonSuggestion || (result.extensionSentence.trim()
       ? "The answer is short, so one light extension can make it easier to speak."
-      : "The answer already has enough basic information for a short Part 1 response.",
+      : "The answer already has enough basic information for a short Part 1 response."),
   };
+}
+
+function buildCompletePolishAnswer(polishedAnswer: string, extensionSentence: string) {
+  const base = polishedAnswer.trim();
+  const extension = extensionSentence.trim();
+
+  if (!extension) {
+    return base;
+  }
+
+  return `${base.replace(/\s+$/g, "")} ${extension}`.replace(/\s+/g, " ").trim();
 }
 
 function mapFeedbackTypeToLegacy(

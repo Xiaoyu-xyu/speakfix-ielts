@@ -126,12 +126,41 @@ const cases = [
       valid: true,
     },
   },
+  {
+    name: "high-confidence ASR correction only changes cleaned transcript",
+    raw: "Yes, I like wear in T-shirts.",
+    questionText: "Do you like wearing T-shirts?",
+    answerStructureType: "yes_no_reason",
+    expect: {
+      language: "english_answer",
+      cleaned: "Yes, I like wearing T-shirts.",
+      display: "Yes, I like wear in T-shirts.",
+      valid: true,
+    },
+  },
+  {
+    name: "ambiguous ASR word is not force-corrected",
+    raw: "I like close.",
+    questionText: "What kind of clothes do you like to wear?",
+    answerStructureType: "type_reason",
+    expect: {
+      language: "english_answer",
+      cleaned: "I like close.",
+      display: "I like close.",
+      valid: true,
+    },
+  },
 ];
 
 for (const testCase of cases) {
   const language = classifyTranscriptLanguageIntent(testCase.raw);
   const cleaned =
-    language === "english_answer" ? normalizeAsrTranscript(testCase.raw) : "";
+    language === "english_answer"
+      ? normalizeAsrTranscript(testCase.raw, {
+          questionText: testCase.questionText,
+          answerStructureType: testCase.answerStructureType,
+        })
+      : "";
   const display =
     language === "english_answer" ? normalizeDisplayTranscript(testCase.raw) : "";
   const valid =

@@ -95,8 +95,18 @@ assert.ok(
 );
 
 assert.ok(
+  !source.includes(">润色：<") && !source.includes(">扩展：<"),
+  "A03 display should not split the answer into polish/extension subtitles",
+);
+
+assert.ok(
+  source.includes("completeAnswer") && source.includes("reasonSuggestion"),
+  "A03 display should use a complete English answer plus one Chinese reasonSuggestion",
+);
+
+assert.ok(
   /answerLength\s*<\s*3\s*&&\s*!answerHasValidMeaning/.test(source),
   "answer_too_short_detected should be gated by semantic validity, not only word count",
 );
 
-console.log("analytics-contract tests passed=8");
+console.log("analytics-contract tests passed=10");

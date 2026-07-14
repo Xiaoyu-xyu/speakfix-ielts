@@ -6,7 +6,13 @@ export type TranscriptLanguageIntent =
   | "mixed_unclear"
   | "english_answer";
 
-export function normalizeAsrTranscript(rawTranscript: string) {
+export function normalizeAsrTranscript(
+  rawTranscript: string,
+  context?: {
+    questionText?: string;
+    answerStructureType?: AnswerStructureType;
+  },
+) {
   let text = rawTranscript
     .normalize("NFKC")
     .replace(/\p{Extended_Pictographic}/gu, "")
@@ -23,6 +29,7 @@ export function normalizeAsrTranscript(rawTranscript: string) {
 
   text = normalizeEnglishPracticeLanguage(text);
   text = normalizeMisheardCorrectionMarkers(text);
+  text = applyHighConfidenceAsrCorrections(text, context);
   text = applySelfCorrectionCleanup(text);
   text = cleanupSpeechDisfluencies(text);
   text = normalizeAsrFragmentation(text);
@@ -32,6 +39,28 @@ export function normalizeAsrTranscript(rawTranscript: string) {
   }
 
   return text;
+}
+
+function applyHighConfidenceAsrCorrections(
+  text: string,
+  context?: {
+    questionText?: string;
+    answerStructureType?: AnswerStructureType;
+  },
+) {
+  const question = context?.questionText?.toLowerCase() ?? "";
+  const isClothesQuestion =
+    /\b(clothes?|t-?shirts?|wear(?:ing)?)\b/.test(question) ||
+    context?.answerStructureType === "type_reason";
+
+  if (!isClothesQuestion) {
+    return text;
+  }
+
+  return text.replace(
+    /\b(like|enjoy|prefer)\s+(?:where|wear)\s+in\s+(?=(?:t\s*-?\s*shirts?|shirts?|clothes?)\b)/gi,
+    "$1 wearing ",
+  );
 }
 
 export function classifyTranscriptLanguageIntent(
